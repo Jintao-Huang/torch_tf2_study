@@ -59,6 +59,7 @@ class MSELoss(Function):
 
     @staticmethod
     def backward(ctx, output_grad):
+        """output_grad == 1."""
         x, target = ctx.saved_tensors
         return output_grad * 2 * (x - target), None
 
