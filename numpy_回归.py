@@ -46,7 +46,7 @@ def relu_backward(z, a_grad):
 
 
 def mse_loss(y_true, y_pred):
-    """loss = np.mean((y_true - y_pred) ** 2, axis=-1)
+    """loss = np.mean((y_true - y_pred) ** 2)
 
     均方误差
 
