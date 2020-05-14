@@ -84,17 +84,20 @@ def sgd(params, lr=1e-2):
 def main():
     lr = 1e-1
     hide_c = 100  # 隐藏层的通道数
-
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
     # 1. 制作数据集
     # input_c: 1, output_c: 1
-    x = torch.linspace(-1, 1, 1000)[:, None]  # shape(1000, 1)
-    y_true = x ** 2 + 2 + torch.normal(0, 0.1, x.shape)
+    x = torch.linspace(-1, 1, 1000, device=device)[:, None]  # shape(1000, 1)
+    y_true = x ** 2 + 2 + torch.normal(0, 0.1, x.shape, device=device)
 
     # 2. 参数初始化
-    w1 = torch.normal(0, 0.1, (1, hide_c), requires_grad=True)
-    w2 = torch.normal(0, 0.1, (hide_c, 1), requires_grad=True)
-    b1 = torch.zeros((hide_c,), requires_grad=True)
-    b2 = torch.zeros((1,), requires_grad=True)
+    w1 = torch.normal(0, 0.1, (1, hide_c), requires_grad=True, device=device)
+    w2 = torch.normal(0, 0.1, (hide_c, 1), requires_grad=True, device=device)
+    b1 = torch.zeros((hide_c,), requires_grad=True, device=device)
+    b2 = torch.zeros((1,), requires_grad=True, device=device)
 
     # 3. 训练
     # 此处省略batch_size, 方便理解
@@ -117,9 +120,9 @@ def main():
             print(i, "%.6f" % loss)
 
     # 4. 作图
-    x = x.numpy()
-    y_true = y_true.numpy()
-    y_pred = y_pred.detach().numpy()
+    x = x.cpu().numpy()
+    y_true = y_true.cpu().numpy()
+    y_pred = y_pred.cpu().detach().numpy()
     plt.scatter(x, y_true, s=20)
     plt.plot(x, y_pred, "r-")
     plt.text(0, 2, "loss %.4f" % loss, fontsize=20, color="r")
