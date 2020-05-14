@@ -78,7 +78,6 @@ def sgd(params, grads, lr=1e-2):
     assert isinstance(params, list)
     for i in range(len(params)):
         params[i] -= lr * grads[i]
-    # return params
 
 
 def main():
