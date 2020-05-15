@@ -13,7 +13,6 @@ class SimpleNN(nn.Sequential):
 
 
 def main():
-    lr = 1e-1
     hide_c = 100  # 隐藏层的通道数
 
     if torch.cuda.is_available():
@@ -29,13 +28,15 @@ def main():
     # 2. 建立网络、损失、优化器
     model = SimpleNN(1, hide_c, 1).to(device)
     loss_fn = nn.MSELoss()
-    optim = torch.optim.SGD(model.parameters(), lr)
+    # optim = torch.optim.SGD(model.parameters(), 1e-1)
+    optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9)
+    # optim = torch.optim.Adam(model.parameters(), 1e-3)
 
     # 3. 训练
     # 此处省略batch_size, 方便理解
     # 网络模型: 2层全连接网络
-    # loss: mse(mean square error) 均方误差
-    # optim: sgd(stochastic gradient descent)  随机梯度下降. (虽然此处为批梯度下降，别在意这些细节)
+    # loss: MSE(mean square error) 均方误差
+    # optim: SGDM(stochastic gradient descent with momentum)
     for i in range(501):
         # 1. forward
         y_pred = model(x)
