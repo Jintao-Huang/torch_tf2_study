@@ -6,22 +6,37 @@ import torch
 import time
 
 
+class ConvBNReLU(nn.Sequential):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, bias):
+        super(ConvBNReLU, self).__init__(
+            nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=bias),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+
+class ConvBlock(nn.Sequential):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, bias):
+        super().__init__(
+            ConvBNReLU(in_channels, out_channels, kernel_size, 1, padding, bias=bias),
+            ConvBNReLU(out_channels, out_channels, kernel_size, 1, padding, bias=bias),
+            ConvBNReLU(out_channels, out_channels, kernel_size, stride, padding, bias=bias)
+        )
+
+
 class SimpleCNN(nn.Module):
     """VGG like"""
 
     def __init__(self):
         super(SimpleCNN, self).__init__()
         self.features = nn.Sequential(
-            nn.Conv2d(1, 16, 3, 1, 1, bias=False),
-            nn.Conv2d(16, 16, 3, 1, 1, bias=False),
-            nn.MaxPool2d(3, 2, 1),
-
-            nn.Conv2d(16, 32, 3, 1, 1, bias=False),
-            nn.Conv2d(32, 32, 3, 1, 1, bias=False),
-            nn.MaxPool2d(3, 2, 1),
+            ConvBlock(1, 16, 3, 2, 1, False),  # 14
+            ConvBlock(16, 32, 3, 2, 1, False)  # 7
         )
         self.classifier = nn.Sequential(
             nn.Linear(7 * 7 * 32, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.2),  # drop_p
             nn.Linear(256, 10),
         )
 
@@ -62,8 +77,8 @@ def main():
     # 2. 建立网络、损失、优化器
     model = SimpleCNN().to(device)
     loss_fn = nn.CrossEntropyLoss()
-    optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9)
-    # optim = torch.optim.Adam(model.parameters(), 5e-4)
+    optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=1e-4)
+    # optim = torch.optim.Adam(model.parameters(), 5e-4, weight_decay=1e-4)
 
     # 3. 训练集训练
     print("---------------------- Train")
@@ -98,6 +113,7 @@ def main():
 
     loss_total, acc_total = 0., 0.
     start_time = time.time()
+    model.eval()  # 评估模式. 对dropout、bn有作用
     with torch.no_grad():
         for i, (data, label) in enumerate(test_loader):
             data, label = data.to(device), label.to(device)
