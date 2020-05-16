@@ -1,3 +1,6 @@
+# Author: Jintao Huang
+# Time: 2020-5-10
+
 import numpy as np
 import matplotlib.pyplot as plt
 

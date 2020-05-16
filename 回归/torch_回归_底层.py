@@ -1,3 +1,6 @@
+# Author: Jintao Huang
+# Time: 2020-5-10
+
 from torch.autograd import Function
 import torch
 import matplotlib.pyplot as plt

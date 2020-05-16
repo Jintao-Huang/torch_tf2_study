@@ -1,3 +1,6 @@
+# Author: Jintao Huang
+# Time: 2020-5-10
+
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt

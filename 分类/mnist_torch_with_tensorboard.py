@@ -1,3 +1,8 @@
+# Author: Jintao Huang
+# Time: 2020-5-16
+
+# 使用 mnist_torch.py 的模型案例
+
 from torchvision.datasets.mnist import MNIST
 import torchvision.transforms.transforms as trans
 from torch.utils.data import DataLoader
@@ -144,6 +149,7 @@ def main():
 
     save_params(model, "mnist_model.pth")
     writer.close()
+
 
 if __name__ == '__main__':
     main()

@@ -1,3 +1,6 @@
+# Author: Jintao Huang
+# Time: 2020-5-14
+
 from torchvision.datasets.mnist import MNIST
 import torchvision.transforms.transforms as trans
 from torch.utils.data import DataLoader
