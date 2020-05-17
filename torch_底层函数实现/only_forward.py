@@ -303,7 +303,8 @@ def _conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     # Out(H, W) = (In(H, W) + 2 * padding − kernel_size) // stride + 1. 已经算上了padding
     output_h, output_w = (x.shape[2] - kernel_size[0]) // stride[0] + 1, \
                          (x.shape[3] - kernel_size[1]) // stride[1] + 1
-    output = torch.zeros((x.shape[0], weight.shape[0], output_h, output_w), dtype=x.dtype, device=x.device)
+    output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
+                         dtype=x.dtype, device=x.device)
     # 计算复杂度: (N * K_Cout * K_Cin * KH * KW) * groups * Hout * Wout
     # 如果groups == 1: N * KH * KW * Cin * Cout * Hout * Wout
     # 如果groups == Cin(深度可分离卷积): N * KH * KW * groups * (Cout / Cin) * Hout * Wout  (复杂度显著降低)
@@ -334,7 +335,7 @@ def _nearest_interpolate(x, output_size):
     """
     if isinstance(output_size, int):
         output_size = (output_size, output_size)
-    assert x.dim() in (3, 4) and isinstance(output_size, (tuple, list))
+    assert x.dim() in (3, 4)
 
     in_size = x.shape[-2:]
     # 1. output的坐标点 => 映射src坐标点
@@ -361,7 +362,7 @@ def _bilinear_interpolate(x, output_size, align_corners=False):
     """
     if isinstance(output_size, int):
         output_size = (output_size, output_size)
-    assert x.dim() in (3, 4) and isinstance(output_size, (tuple, list))
+    assert x.dim() in (3, 4)
 
     in_size = x.shape[-2:]
     # 1. output的坐标点 => 映射src坐标点
@@ -485,3 +486,52 @@ def _roi_align(x, boxes, output_size, sampling_ratio=-1):
             # 对预选框进行roi_align操作
             output.append(__roi_align(input_, boxes, output_size, sampling_ratio))
     return torch.stack(output)
+
+
+def _adaptive_avg_pool2d(x, output_size):
+    """自适应的平均池化(F.adaptive_avg_pool2d())
+
+    :param x: shape = (N, Hin, Win) or (N, Cin, Hin, Win)
+    :return: shape = (N, Out[0], Out[1]) or (N, Cin, Out[0], Out[1])"""
+
+    assert x.dim() in (3, 4)
+    if isinstance(output_size, int):
+        output_size = output_size, output_size
+
+    # 切成output_size[0]个区间
+    split_h = torch.linspace(0, x.shape[-2], output_size[0] + 1)
+    split_w = torch.linspace(0, x.shape[-1], output_size[1] + 1)
+    output = torch.empty((*x.shape[:-2], *output_size), dtype=x.dtype, device=x.device)
+
+    for i in range(output.shape[-2]):
+        for j in range(output.shape[-1]):
+            pos_h = slice(split_h[i].int().item(), split_h[i + 1].ceil().int().item())
+            pos_w = slice(split_w[j].int().item(), split_w[j + 1].ceil().int().item())
+
+            output[..., i, j] = torch.mean(x[..., pos_h, pos_w], dim=(-2, -1))
+    return output
+
+
+def _adaptive_max_pool2d(x, output_size):
+    """自适应的最大池化(F.adaptive_max_pool2d())
+    notice: 不支持 return_indices.
+
+    :param x: shape = (N, Hin, Win) or (N, Cin, Hin, Win)
+    :return: shape = (N, Out[0], Out[1]) or (N, Cin, Out[0], Out[1])"""
+
+    assert x.dim() in (3, 4)
+    if isinstance(output_size, int):
+        output_size = output_size, output_size
+
+    # 切成output_size[0]个区间
+    split_h = torch.linspace(0, x.shape[-2], output_size[0] + 1)
+    split_w = torch.linspace(0, x.shape[-1], output_size[1] + 1)
+    output = torch.empty((*x.shape[:-2], *output_size), dtype=x.dtype, device=x.device)
+
+    for i in range(output.shape[-2]):
+        for j in range(output.shape[-1]):
+            pos_h = slice(split_h[i].int().item(), split_h[i + 1].ceil().int().item())
+            pos_w = slice(split_w[j].int().item(), split_w[j + 1].ceil().int().item())
+            output[..., i, j] = torch.max(torch.max(x[:, pos_h, pos_w], dim=-2)[0], dim=-1)[0]  # dim=(-2, -1)
+
+    return output
