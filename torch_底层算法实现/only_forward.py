@@ -105,8 +105,8 @@ def _batch_norm(x, weight, bias, running_mean, running_var,
     :return: shape = x.shape"""
 
     # training:
-    #   归一化x 使用x.mean(), x.var()
-    #   running_mean, running_var进行滑动平均 (forward时更新)
+    #   归一化x 使用x.mean(), x.var()(非估计).
+    #   running_mean, running_var进行滑动平均. 无偏估计(forward时更新)
     #   weight, bias (backward时更新)
     #
     # not training:
@@ -116,11 +116,10 @@ def _batch_norm(x, weight, bias, running_mean, running_var,
     assert x.dim() in (2, 4)
 
     dim = 0 if x.dim() == 2 else (0, 2, 3)
-    mean = torch.mean(x, dim)  # shape(In,)
-    var = torch.var(x, dim, False)  # 不是估计值
-
     if training:
         # 归一化x 使用x.mean(), x.var()
+        mean = torch.mean(x, dim)  # shape(In,)
+        var = torch.var(x, dim, False)  # 不是估计值
         # running_mean, running_var进行滑动平均 (forward时更新)
         running_mean[:] = (1 - momentum) * running_mean + momentum * mean
         running_var[:] = (1 - momentum) * running_var + momentum * torch.var(x, dim, True)  # 无偏估计
@@ -129,10 +128,14 @@ def _batch_norm(x, weight, bias, running_mean, running_var,
         mean = running_mean
         var = running_var
 
-    if x.dim() == 4:
-        mean, var = mean[:, None, None], var[:, None, None]
-        weight, bias = weight[:, None, None], bias[:, None, None]
-    return (x - mean) / (torch.sqrt(var + eps)) * weight + bias
+    # 既满足2D，也满足4D
+    mean, var = mean[:, None, None], var[:, None, None]
+    weight, bias = weight[:, None, None], bias[:, None, None]
+    return (x - mean) * torch.rsqrt(var + eps) * weight + bias
+    # 或
+    # scale = weight * torch.rsqrt(var + eps)
+    # bias = bias - mean * scale
+    # return x * scale + bias
 
 
 def _dropout(x, drop_p, training):
