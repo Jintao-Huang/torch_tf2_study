@@ -129,8 +129,9 @@ def _batch_norm(x, weight, bias, running_mean, running_var,
         var = running_var
 
     # 既满足2D，也满足4D
-    mean, var = mean[:, None, None], var[:, None, None]
-    weight, bias = weight[:, None, None], bias[:, None, None]
+    if x.dim() == 4:
+        mean, var = mean[:, None, None], var[:, None, None]
+        weight, bias = weight[:, None, None], bias[:, None, None]
     return (x - mean) * torch.rsqrt(var + eps) * weight + bias
     # 或
     # scale = weight * torch.rsqrt(var + eps)
