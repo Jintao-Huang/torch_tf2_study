@@ -52,14 +52,15 @@ def _binary_cross_entropy(y_pred, y_true, with_logits=False):
 
     :param y_pred: shape = (N,)
     :param y_true: shape = (N,)
-    :param with_logits: y_pred是否已过sigmoid
+    :param with_logits: y_pred是否未过sigmoid
     :return: shape = ()"""
 
-    if not with_logits:
+    assert y_pred.dtype in (torch.float32, torch.float64)
+    if with_logits:
         y_pred = torch.sigmoid(y_pred)
-    y_pred = torch.clamp_min(y_pred, 1e-12)
-    return torch.mean(y_true * -torch.log(y_pred) +
-                      (1 - y_true) * -torch.log(1 - y_pred))
+    # 此处不检查y_pred 要在 [0., 1.] 区间内
+    y_pred = torch.clamp(y_pred, 1e-12, 1 - 1e-12)
+    return torch.mean(y_true * -torch.log(y_pred) + (1 - y_true) * -torch.log(1 - y_pred))
 
 
 def _mse_loss(y_pred, y_true):
