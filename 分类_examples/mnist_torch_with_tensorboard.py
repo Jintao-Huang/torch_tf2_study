@@ -62,6 +62,63 @@ def save_params(model, filename):
     torch.save(model.state_dict(), filename)
 
 
+def train(model, loss_fn, optim, train_loader, epoch, device, writer=None):
+    for i in range(epoch):
+        loss_total, acc_total, start_time = 0., 0., time.time()
+        for j, (data, label) in enumerate(train_loader):
+            data, label = data.to(device), label.to(device)
+            pred = model(data)
+            loss = loss_fn(pred, label)
+            optim.zero_grad()
+            loss.backward()
+            optim.step()
+            # 后续操作
+            acc = get_acc(pred, label)
+            loss_total += loss.item()
+            acc_total += acc.item()
+            if j % 10 == 0:
+                loss_mean = loss_total / (j + 1)
+                acc_mean = acc_total / (j + 1)
+                end_time = time.time()
+                if writer is not None:
+                    writer.add_scalar("loss", loss, i * len(train_loader) + j + 1)
+                    writer.add_scalar("acc", acc, i * len(train_loader) + j + 1)
+                print("\r>> %d / %d| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
+                      (j + 1, len(train_loader), loss_mean, acc_mean * 100, end_time - start_time), end="")
+        else:
+            loss_mean = loss_total / (j + 1)
+            acc_mean = acc_total / (j + 1)
+            end_time = time.time()
+            if writer is not None:
+                writer.add_scalar("loss", loss, i * len(train_loader) + j + 1)
+                writer.add_scalar("acc", acc, i * len(train_loader) + j + 1)
+            print("\r>> %d / %d| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
+                  (j + 1, len(train_loader), loss_mean, acc_mean * 100, end_time - start_time))
+
+
+def test(model, test_loader, device, ):
+    acc_total = 0.
+    start_time = time.time()
+    model.eval()  # 评估模式. 对dropout、bn有作用
+    with torch.no_grad():
+        for i, (data, label) in enumerate(test_loader):
+            data, label = data.to(device), label.to(device)
+            pred = model(data)
+            # 后续操作
+            acc = get_acc(pred, label)
+            acc_total += acc.item()
+            if i % 10 == 0:
+                acc = acc_total / (i + 1)
+                end_time = time.time()
+                print("\r>> %d / %d| Acc: %.2f%%| Time: %.4f" %
+                      (i + 1, len(test_loader), acc * 100, end_time - start_time), end="")
+        else:
+            acc = acc_total / (i + 1)
+            end_time = time.time()
+            print("\r>> %d / %d| Acc: %.2f%%| Time: %.4f" %
+                  (i + 1, len(test_loader), acc * 100, end_time - start_time))
+
+
 def main():
     epoch = 5
 
@@ -83,70 +140,17 @@ def main():
     # 2. 建立网络、损失、优化器
     model = SimpleCNN().to(device)
     loss_fn = nn.CrossEntropyLoss()
-    optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=1e-4)
+    optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=1e-4, nesterov=True)
+    # optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=1e-4)
     # optim = torch.optim.Adam(model.parameters(), 5e-4, weight_decay=1e-4)
     writer = SummaryWriter("logs")
+
     # 3. 训练集训练
     print("---------------------- Train")
-    for i in range(epoch):
-        loss_total, acc_total, start_time = 0., 0., time.time()
-        for j, (data, label) in enumerate(train_loader):
-            data, label = data.to(device), label.to(device)
-            pred = model(data)
-            loss = loss_fn(pred, label)
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-            # 后续操作
-            acc = get_acc(pred, label)
-            loss_total += loss.item()
-            acc_total += acc.item()
-            if j % 10 == 0:
-                loss_mean = loss_total / (j + 1)
-                acc_mean = acc_total / (j + 1)
-                end_time = time.time()
-                writer.add_scalar("loss", loss, i * len(train_loader) + j + 1)
-                writer.add_scalar("acc", acc, i * len(train_loader) + j + 1)
-                print("\r>> %d / %d| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
-                      (j + 1, len(train_loader), loss_mean, acc_mean * 100, end_time - start_time), end="")
-        else:
-            loss_mean = loss_total / (j + 1)
-            acc_mean = acc_total / (j + 1)
-            end_time = time.time()
-            writer.add_scalar("loss", loss, i * len(train_loader) + j + 1)
-            writer.add_scalar("acc", acc, i * len(train_loader) + j + 1)
-            writer.flush()
-            print("\r>> %d / %d| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
-                  (j + 1, len(train_loader), loss_mean, acc_mean * 100, end_time - start_time))
-
+    train(model, loss_fn, optim, train_loader, epoch, device, writer)
     # 测试集测试
     print("---------------------- Test")
-
-    loss_total, acc_total = 0., 0.
-    start_time = time.time()
-    model.eval()  # 评估模式. 对dropout、bn有作用
-    with torch.no_grad():
-        for i, (data, label) in enumerate(test_loader):
-            data, label = data.to(device), label.to(device)
-            pred = model(data)
-            loss = loss_fn(pred, label)  # 就看看
-            # 后续操作
-            acc = get_acc(pred, label)
-            loss_total += loss.item()
-            acc_total += acc.item()
-            if i % 10 == 0:
-                loss_mean = loss_total / (i + 1)
-                acc_mean = acc_total / (i + 1)
-                end_time = time.time()
-                print("\r>> %d / %d| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
-                      (i + 1, len(test_loader), loss_mean, acc_mean * 100, end_time - start_time), end="")
-        else:
-            loss_mean = loss_total / (i + 1)
-            acc_mean = acc_total / (i + 1)
-            end_time = time.time()
-            print("\r>> %d / %d| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
-                  (i + 1, len(test_loader), loss_mean, acc_mean * 100, end_time - start_time))
-
+    test(model, test_loader, device)
     save_params(model, "mnist_model.pth")
     writer.close()
 
