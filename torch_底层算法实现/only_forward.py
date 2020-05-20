@@ -57,8 +57,8 @@ def focal_loss(y_pred, y_true, gamma=2):
 
     :param y_pred: shape = (N, num_classes)
     :param y_true: shape = (N,)"""
-    # y_pred = torch.clamp_min(torch.softmax(y_pred, dim=-1), 1e-12)
-    # y_true = to_categorical(y_true, y_pred.shape[1])
+    y_pred = torch.clamp_min(torch.softmax(y_pred, dim=-1), 1e-12)
+    y_true = to_categorical(y_true, y_pred.shape[1])
 
     return torch.mean(torch.sum(y_true * -torch.log(y_pred) * (1 - y_pred) ** gamma, -1))
 
@@ -85,6 +85,18 @@ def _mse_loss(y_pred, y_true):
     :return: shape = ()"""
 
     return torch.mean((y_true - y_pred) ** 2)
+
+
+def smooth_l1_loss(y_pred, y_true, divide_line=1.):
+    """无论divide_line为多少, 交界处的梯度为1
+
+    :param y_pred: shape(N, C)
+    :param y_true: shape(N, C)
+    :param divide_line: = 分界线
+    :return: shape(N, C)
+    """
+    diff = torch.abs(y_pred - y_true)
+    return torch.mean(torch.where(diff < divide_line, 0.5 / divide_line * diff ** 2, diff - 0.5 * divide_line))
 
 
 def _sigmoid(x):
@@ -148,7 +160,7 @@ def _batch_norm(x, weight, bias, running_mean, running_var,
         mean, var = mean[:, None, None], var[:, None, None]
         weight, bias = weight[:, None, None], bias[:, None, None]
     return (x - mean) * torch.rsqrt(var + eps) * weight + bias
-    # 或
+    # or:
     # scale = weight * torch.rsqrt(var + eps)
     # bias = bias - mean * scale
     # return x * scale + bias
