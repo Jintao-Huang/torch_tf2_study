@@ -10,9 +10,9 @@ import math
 def to_categorical(x, num_classes=None):
     """转热码(已测试)
 
-    :param x: shape = (N,)
+    :param x: shape = (N,) or (...)
     :param num_classes: 默认 num_classes = max(x) + 1
-    :return: shape = (N, class_num) float"""
+    :return: shape = (N, num_classes) or (..., num_classes). float32"""
 
     assert x.dtype in (torch.int32, torch.int64), "x的类型只支持torch.int32与torch.int64"
 
@@ -23,14 +23,14 @@ def to_categorical(x, num_classes=None):
 
 
 def _cross_entropy(y_pred, y_true):
-    """交叉熵损失函数(F.cross_entropy() 只实现了部分功能)
+    """交叉熵损失函数(F.cross_entropy() 只实现了部分功能). y_pred 未过softmax
 
-    :param y_pred: shape = (N, num_classes). with_logits(未过softmax)
-    :param y_true: shape = (N,)
+    :param y_pred: shape = (N, num_classes) or (..., num_classes)
+    :param y_true: shape = (N,) or (...)
     :return: shape = ()"""
 
-    y_pred = torch.clamp_min(torch.softmax(y_pred, dim=-1), 1e-12)  # 防log(0)
-    y_true = to_categorical(y_true, y_pred.shape[1])
+    y_pred = torch.clamp_min(torch.softmax(y_pred, dim=-1), 1e-6)  # 防log(0)
+    y_true = to_categorical(y_true, y_pred.shape[-1])
 
     return torch.mean(torch.sum(y_true * -torch.log(y_pred), -1))
 
@@ -38,8 +38,8 @@ def _cross_entropy(y_pred, y_true):
 def _binary_cross_entropy(y_pred, y_true, with_logits=False):
     """交叉熵损失函数(F.binary_cross_entropy() and F.binary_cross_entropy_with_logits())
 
-    :param y_pred: shape = (N,)
-    :param y_true: shape = (N,)
+    :param y_pred: shape = (N,) or (...)
+    :param y_true: shape = (N,) or (...)
     :param with_logits: y_pred是否未过sigmoid
     :return: shape = ()"""
 
@@ -47,7 +47,7 @@ def _binary_cross_entropy(y_pred, y_true, with_logits=False):
     if with_logits:
         y_pred = torch.sigmoid(y_pred)
     # 此处不检查y_pred 要在 [0., 1.] 区间内
-    y_pred = torch.clamp(y_pred, 1e-12, 1 - 1e-12)
+    y_pred = torch.clamp(y_pred, 1e-6, 1 - 1e-6)
     # 前式与后式关于0.5对称(The former and the latter are symmetric about 0.5)
     return torch.mean(y_true * -torch.log(y_pred) + (1 - y_true) * -torch.log(1 - y_pred))
 
@@ -55,10 +55,10 @@ def _binary_cross_entropy(y_pred, y_true, with_logits=False):
 def focal_loss(y_pred, y_true, gamma=2):
     """f(x) = -(1 - x)^a * ln(x) = (1 - x)^a * CELoss(x)(已测试)
 
-    :param y_pred: shape = (N, num_classes)
-    :param y_true: shape = (N,)"""
-    y_pred = torch.clamp_min(torch.softmax(y_pred, dim=-1), 1e-12)
-    y_true = to_categorical(y_true, y_pred.shape[1])
+    :param y_pred: shape = (N, num_classes) or (..., num_classes)
+    :param y_true: shape = (N,) or (...)"""
+    y_pred = torch.clamp_min(torch.softmax(y_pred, dim=-1), 1e-6)
+    y_true = to_categorical(y_true, y_pred.shape[-1])
 
     return torch.mean(torch.sum(y_true * -torch.log(y_pred) * (1 - y_pred) ** gamma, -1))
 
@@ -66,12 +66,12 @@ def focal_loss(y_pred, y_true, gamma=2):
 def binary_focal_loss(y_pred, y_true, gamma=2, with_logits=False):
     """f(x) = -(1 - x)^a * ln(x) = (1 - x)^a * CELoss(x)(已测试)
 
-    :param y_pred: shape = (N,)
-    :param y_true: shape = (N,)
+    :param y_pred: shape = (N,) or (...)
+    :param y_true: shape = (N,) or (...)
     :param with_logits: y_pred是否未经过sigmoid"""
     if with_logits:
         y_pred = torch.sigmoid(y_pred)
-    y_pred = torch.clamp(y_pred, 1e-12, 1 - 1e-12)
+    y_pred = torch.clamp(y_pred, 1e-6, 1 - 1e-6)
     # 前式与后式关于0.5对称(The former and the latter are symmetric about 0.5)
     return torch.mean(y_true * -torch.log(y_pred) * (1 - y_pred) ** gamma +
                       (1 - y_true) * -torch.log(1 - y_pred) * y_pred ** gamma)
@@ -80,8 +80,8 @@ def binary_focal_loss(y_pred, y_true, gamma=2, with_logits=False):
 def _mse_loss(y_pred, y_true):
     """均方误差损失(F.mse_loss() 只实现了部分功能)
 
-    :param y_pred: shape = (N, num)
-    :param y_true: shape = (N, num)
+    :param y_pred: shape = (N, num) or (...)
+    :param y_true: shape = (N, num) or (...)
     :return: shape = ()"""
 
     return torch.mean((y_true - y_pred) ** 2)
@@ -90,11 +90,11 @@ def _mse_loss(y_pred, y_true):
 def smooth_l1_loss(y_pred, y_true, divide_line=1.):
     """无论divide_line为多少, 交界处的梯度为1
 
-    :param y_pred: shape(N, C)
-    :param y_true: shape(N, C)
+    :param y_pred: shape(N, num) or (...)
+    :param y_true: shape(N, num) or (...)
     :param divide_line: = 分界线
-    :return: shape(N, C)
-    """
+    :return: ()"""
+
     diff = torch.abs(y_pred - y_true)
     return torch.mean(torch.where(diff < divide_line, 0.5 / divide_line * diff ** 2, diff - 0.5 * divide_line))
 
