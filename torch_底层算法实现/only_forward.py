@@ -12,14 +12,14 @@ def to_categorical(x, num_classes=None):
 
     :param x: shape = (N,)
     :param num_classes: 默认 num_classes = max(x) + 1
-    :return: shape = (N, class_num)"""
+    :return: shape = (N, class_num) float"""
 
     assert x.dtype in (torch.int32, torch.int64), "x的类型只支持torch.int32与torch.int64"
 
     x_max = torch.max(x)
     num_classes = num_classes or x_max + 1
     assert num_classes >= x_max + 1, "num_classes 必须 >= max(x) + 1"
-    return torch.eye(num_classes, dtype=x.dtype, device=x.device)[x]
+    return torch.eye(num_classes, dtype=torch.float, device=x.device)[x]
 
 
 def _cross_entropy(y_pred, y_true):
@@ -35,18 +35,6 @@ def _cross_entropy(y_pred, y_true):
     return torch.mean(torch.sum(y_true * -torch.log(y_pred), -1))
 
 
-def focal_loss(y_pred, y_true, gamma=2):
-    """focal_loss(已测试)
-
-    :param y_pred: shape = (N, num_classes)
-    :param y_true: shape = (N,)"""
-    # f(x) = -(1 - x)^a * ln(x)
-    y_pred = torch.clamp_min(torch.softmax(y_pred, dim=-1), 1e-12)
-    y_true = to_categorical(y_true, y_pred.shape[1])
-
-    return torch.mean(torch.sum(y_true * -torch.log(y_pred) * (1 - y_pred) ** gamma, -1))
-
-
 def _binary_cross_entropy(y_pred, y_true, with_logits=False):
     """交叉熵损失函数(F.binary_cross_entropy() and F.binary_cross_entropy_with_logits())
 
@@ -60,7 +48,33 @@ def _binary_cross_entropy(y_pred, y_true, with_logits=False):
         y_pred = torch.sigmoid(y_pred)
     # 此处不检查y_pred 要在 [0., 1.] 区间内
     y_pred = torch.clamp(y_pred, 1e-12, 1 - 1e-12)
+    # 前式与后式关于0.5对称(The former and the latter are symmetric about 0.5)
     return torch.mean(y_true * -torch.log(y_pred) + (1 - y_true) * -torch.log(1 - y_pred))
+
+
+def focal_loss(y_pred, y_true, gamma=2):
+    """f(x) = -(1 - x)^a * ln(x) = (1 - x)^a * CELoss(x)(已测试)
+
+    :param y_pred: shape = (N, num_classes)
+    :param y_true: shape = (N,)"""
+    # y_pred = torch.clamp_min(torch.softmax(y_pred, dim=-1), 1e-12)
+    # y_true = to_categorical(y_true, y_pred.shape[1])
+
+    return torch.mean(torch.sum(y_true * -torch.log(y_pred) * (1 - y_pred) ** gamma, -1))
+
+
+def binary_focal_loss(y_pred, y_true, gamma=2, with_logits=False):
+    """f(x) = -(1 - x)^a * ln(x) = (1 - x)^a * CELoss(x)(已测试)
+
+    :param y_pred: shape = (N,)
+    :param y_true: shape = (N,)
+    :param with_logits: y_pred是否未经过sigmoid"""
+    if with_logits:
+        y_pred = torch.sigmoid(y_pred)
+    y_pred = torch.clamp(y_pred, 1e-12, 1 - 1e-12)
+    # 前式与后式关于0.5对称(The former and the latter are symmetric about 0.5)
+    return torch.mean(y_true * -torch.log(y_pred) * (1 - y_pred) ** gamma +
+                      (1 - y_true) * -torch.log(1 - y_pred) * y_pred ** gamma)
 
 
 def _mse_loss(y_pred, y_true):
