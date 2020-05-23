@@ -64,14 +64,14 @@ class _MSELoss(Function):
 
 
 class _SGD(Optimizer):
-    """pure SGD"""
+    """pure SGD (完整版见`/torch_底层算法实现/optim.py`)"""
 
     def __init__(self, params, lr):
         defaults = {"lr": lr}
         super(_SGD, self).__init__(params, defaults)
 
     def step(self, closure=None):
-        for group in self.param_groups:
+        for group in self.param_groups:  # 一般也就一个group
             params = group['params']
             lr = group['lr']
             for param in params:

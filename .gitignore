@@ -2,3 +2,6 @@ mnist/
 *.pth
 logs/
 other/
+temp.py
+runs/
+cifar/

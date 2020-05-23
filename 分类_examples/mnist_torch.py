@@ -77,17 +77,17 @@ def train(model, loss_fn, optim, train_loader, epoch, device):
                 loss = loss_total / (j + 1)
                 acc = acc_total / (j + 1)
                 end_time = time.time()
-                print("\r>> %d / %d| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
-                      (j + 1, len(train_loader), loss, acc * 100, end_time - start_time), end="")
+                print("\r>> Epoch: %d[%d/%d]|| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
+                      (i, j + 1, len(train_loader), loss, acc * 100, end_time - start_time), end="")
         else:
             loss = loss_total / (j + 1)
             acc = acc_total / (j + 1)
             end_time = time.time()
-            print("\r>> %d / %d| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
-                  (j + 1, len(train_loader), loss, acc * 100, end_time - start_time))
+            print("\r>> Epoch: %d[%d/%d]| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
+                  (i, j + 1, len(train_loader), loss, acc * 100, end_time - start_time), flush=True)
 
 
-def test(model, test_loader, device, ):
+def test(model, test_loader, device):
     acc_total = 0.
     start_time = time.time()
     model.eval()  # 评估模式. 对dropout、bn有作用
@@ -101,12 +101,12 @@ def test(model, test_loader, device, ):
             if i % 10 == 0:
                 acc = acc_total / (i + 1)
                 end_time = time.time()
-                print("\r>> %d / %d| Acc: %.2f%%| Time: %.4f" %
+                print("\r>> %d/%d| Acc: %.2f%%| Time: %.4f" %
                       (i + 1, len(test_loader), acc * 100, end_time - start_time), end="")
         else:
             acc = acc_total / (i + 1)
             end_time = time.time()
-            print("\r>> %d / %d| Acc: %.2f%%| Time: %.4f" %
+            print("\r>> %d/%d| Acc: %.2f%%| Time: %.4f" %
                   (i + 1, len(test_loader), acc * 100, end_time - start_time))
 
 

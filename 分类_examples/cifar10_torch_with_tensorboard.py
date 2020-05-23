@@ -1,9 +1,7 @@
 # Author: Jintao Huang
 # Time: 2020-5-16
 
-# 使用 mnist_torch.py 的模型案例
-
-from torchvision.datasets.mnist import MNIST
+from torchvision.datasets.cifar import CIFAR10
 import torchvision.transforms.transforms as trans
 from torch.utils.data import DataLoader
 import torch.nn as nn
@@ -36,14 +34,15 @@ class SimpleCNN(nn.Module):
     def __init__(self):
         super(SimpleCNN, self).__init__()
         self.features = nn.Sequential(
-            ConvBlock(1, 16, 3, 2, 1, False),  # 14
-            ConvBlock(16, 32, 3, 2, 1, False)  # 7
+            ConvBlock(3, 16, 3, 2, 1, False),  # 16
+            ConvBlock(16, 32, 3, 2, 1, False),  # 8
+            ConvBlock(32, 64, 3, 2, 1, False)  # 4
         )
         self.classifier = nn.Sequential(
-            nn.Linear(7 * 7 * 32, 256),
+            nn.Linear(4 * 4 * 64, 512),
             nn.ReLU(inplace=True),
             nn.Dropout(0.2),  # drop_p
-            nn.Linear(256, 10),
+            nn.Linear(512, 10),
         )
 
     def forward(self, x):
@@ -62,9 +61,31 @@ def save_params(model, filename):
     torch.save(model.state_dict(), filename)
 
 
+def lr_schedule(optim, epoch, milestones, decline_rate=0.1):
+    """学习率下降(Decline in learning rate)"""
+
+    def insert_index(x, arr):
+        """arr是一个从小到大的arr, x插入arr应该在的下标(二分查找). 你可以改成顺序查找."""
+
+        lo, hi = 0, len(arr)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if x < arr[mid]:
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
+
+    default_lr = optim.defaults['lr']
+    lr = default_lr * decline_rate ** insert_index(epoch, milestones)
+    optim.param_groups[0]['lr'] = lr
+    return lr
+
+
 def train(model, loss_fn, optim, train_loader, epoch, device, writer=None):
     for i in range(epoch):
         loss_total, acc_total, start_time = 0., 0., time.time()
+        lr = lr_schedule(optim, i, (10, 15), decline_rate=0.1)
         for j, (data, label) in enumerate(train_loader):
             data, label = data.to(device), label.to(device)
             pred = model(data)
@@ -83,8 +104,8 @@ def train(model, loss_fn, optim, train_loader, epoch, device, writer=None):
                 if writer is not None:
                     writer.add_scalar("loss", loss, i * len(train_loader) + j + 1)
                     writer.add_scalar("acc", acc, i * len(train_loader) + j + 1)
-                print("\r>> %d / %d| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
-                      (j + 1, len(train_loader), loss_mean, acc_mean * 100, end_time - start_time), end="")
+                print("\r>> Epoch: %d[%d/%d]| Loss: %.6f| Acc: %.2f%%| Time: %.4f| LR: %g" %
+                      (i, j + 1, len(train_loader), loss_mean, acc_mean * 100, end_time - start_time, lr), end="")
         else:
             loss_mean = loss_total / (j + 1)
             acc_mean = acc_total / (j + 1)
@@ -92,11 +113,12 @@ def train(model, loss_fn, optim, train_loader, epoch, device, writer=None):
             if writer is not None:
                 writer.add_scalar("loss", loss, i * len(train_loader) + j + 1)
                 writer.add_scalar("acc", acc, i * len(train_loader) + j + 1)
-            print("\r>> %d / %d| Loss: %.6f| Acc: %.2f%%| Time: %.4f" %
-                  (j + 1, len(train_loader), loss_mean, acc_mean * 100, end_time - start_time))
+                writer.flush()
+            print("\r>> Epoch: %d[%d/%d]| Loss: %.6f| Acc: %.2f%%| Time: %.4f| LR: %g" %
+                  (i, j + 1, len(train_loader), loss_mean, acc_mean * 100, end_time - start_time, lr), flush=True)
 
 
-def test(model, test_loader, device, ):
+def test(model, test_loader, device):
     acc_total = 0.
     start_time = time.time()
     model.eval()  # 评估模式. 对dropout、bn有作用
@@ -110,17 +132,17 @@ def test(model, test_loader, device, ):
             if i % 10 == 0:
                 acc = acc_total / (i + 1)
                 end_time = time.time()
-                print("\r>> %d / %d| Acc: %.2f%%| Time: %.4f" %
+                print("\r>> %d/%d| Acc: %.2f%%| Time: %.4f" %
                       (i + 1, len(test_loader), acc * 100, end_time - start_time), end="")
         else:
             acc = acc_total / (i + 1)
             end_time = time.time()
-            print("\r>> %d / %d| Acc: %.2f%%| Time: %.4f" %
+            print("\r>> %d/%d| Acc: %.2f%%| Time: %.4f" %
                   (i + 1, len(test_loader), acc * 100, end_time - start_time))
 
 
 def main():
-    epoch = 5
+    epoch = 18
 
     if torch.cuda.is_available():
         device = torch.device('cuda')
@@ -128,22 +150,22 @@ def main():
         device = torch.device('cpu')
 
     # 1. 数据集
-    train_mnist = MNIST("./mnist", train=True, transform=trans.ToTensor(), download=True)
-    test_mnist = MNIST("./mnist", train=False, transform=trans.ToTensor(), download=True)
+    train_cifar10 = CIFAR10("./cifar", train=True, transform=trans.ToTensor(), download=True)
+    test_cifar10 = CIFAR10("./cifar", train=False, transform=trans.ToTensor(), download=True)
 
-    train_loader = DataLoader(train_mnist, 32, True, pin_memory=True, num_workers=1)
-    test_loader = DataLoader(test_mnist, 32, True, pin_memory=True, num_workers=1)
+    train_loader = DataLoader(train_cifar10, 32, True, pin_memory=True, num_workers=1)
+    test_loader = DataLoader(test_cifar10, 32, True, pin_memory=True, num_workers=1)
     # 若运行报错使用下面的.
-    # train_loader = DataLoader(train_mnist, 32, True, pin_memory=True)
-    # test_loader = DataLoader(test_mnist, 32, True, pin_memory=True)
+    # train_loader = DataLoader(train_cifar10, 32, True, pin_memory=True)
+    # test_loader = DataLoader(test_cifar10, 32, True, pin_memory=True)
 
     # 2. 建立网络、损失、优化器
     model = SimpleCNN().to(device)
     loss_fn = nn.CrossEntropyLoss()
-    optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=1e-4, nesterov=True)
-    # optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=1e-4)
-    # optim = torch.optim.Adam(model.parameters(), 5e-4, weight_decay=1e-4)
-    writer = SummaryWriter("logs")
+    # optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=2e-5, nesterov=True)
+    # optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=2e-5)
+    optim = torch.optim.Adam(model.parameters(), 5e-4, weight_decay=2e-5)
+    writer = SummaryWriter()
 
     # 3. 训练集训练
     print("---------------------- Train")
@@ -151,7 +173,7 @@ def main():
     # 测试集测试
     print("---------------------- Test")
     test(model, test_loader, device)
-    save_params(model, "mnist_model.pth")
+    save_params(model, "cifar10_model.pth")
     writer.close()
 
 

@@ -7,7 +7,7 @@ import math
 
 
 def _box_iou(boxes1, boxes2):
-    """copy from torchvision.ops.boxes.box_iou()"""
+    """copy from torchvision.ops.boxes.box_iou(). [0., 1.]"""
     area1 = box_area(boxes1)
     area2 = box_area(boxes2)
 
@@ -22,7 +22,7 @@ def _box_iou(boxes1, boxes2):
 
 
 def box_giou(boxes1, boxes2):
-    """Generalized IoU (https://arxiv.org/pdf/1902.09630.pdf)
+    """Generalized IoU (https://arxiv.org/pdf/1902.09630.pdf).  [-1., 1.]
 
     Solved the situation where the IoU is zero, Cannot reverse transfer the gradient"""
     # 1. calculate iou
@@ -47,7 +47,7 @@ def box_giou(boxes1, boxes2):
 
 
 def box_diou(boxes1, boxes2):
-    """Distance IoU (https://arxiv.org/pdf/1911.08287.pdf)
+    """Distance IoU (https://arxiv.org/pdf/1911.08287.pdf).  [-1., 1.]
 
     the overlapping area and the distance between the center points
     are considered at the same time"""
@@ -82,7 +82,7 @@ def box_diou(boxes1, boxes2):
 
 
 def box_ciou(boxes1, boxes2):
-    """Complete IoU Loss (https://arxiv.org/pdf/2005.03572.pdf)
+    """Complete IoU Loss (https://arxiv.org/pdf/2005.03572.pdf).  [-1., 1.]
 
     The consistency of the aspect ratio between
     the anchor boxes and the target boxes is also extremely important"""
