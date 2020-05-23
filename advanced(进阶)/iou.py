@@ -122,3 +122,24 @@ def box_ciou(boxes1, boxes2):
     alpha = (iou >= 0.5).float() * (v / (1 - iou + v))
     ciou = iou - distance2_center / distance2_outer - alpha * v
     return ciou
+
+
+def iou_loss(iou):
+    """Loss-iou
+
+    :param iou: shape(N, M). anchors, ground-truth box
+    :return:
+    """
+    return 1 - iou.max(dim=1)[0]  # 一个anchors只能对应一个gt box
+
+
+def giou_loss(giou):
+    return 1 - giou.max(dim=1)[0]
+
+
+def diou_loss(diou):
+    return 1 - diou.max(dim=1)[0]
+
+
+def ciou_loss(ciou):
+    return 1 - ciou.max(dim=1)[0]

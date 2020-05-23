@@ -1,12 +1,14 @@
 # Author: Jintao Huang
 # Time: 2020-5-10
+# 为防止与torch中的函数搞混，自己实现的函数前会加上 `_`
 
 from torch.autograd import Function
 import torch
 import matplotlib.pyplot as plt
+from torch.optim.optimizer import Optimizer
 
 
-class Linear(Function):
+class _Linear(Function):
     """z = x @ w + b"""
 
     @staticmethod
@@ -28,11 +30,8 @@ class Linear(Function):
         b_grad = torch.mean(z_grad, dim=0)
         return x_grad, w_grad, b_grad
 
-    def __call__(self, *args, **kwargs):
-        return self.apply(*args, **kwargs)
 
-
-class ReLU(Function):
+class _ReLU(Function):
     """a = relu(z)"""
 
     @staticmethod
@@ -47,11 +46,8 @@ class ReLU(Function):
         zero_one_arr, = ctx.saved_tensors
         return a_grad * zero_one_arr
 
-    def __call__(self, *args, **kwargs):
-        return self.apply(*args, **kwargs)
 
-
-class MSELoss(Function):
+class _MSELoss(Function):
     """loss = torch.mean((y_true - y_pred) ** 2)"""
 
     @staticmethod
@@ -66,22 +62,20 @@ class MSELoss(Function):
         x, target = ctx.saved_tensors
         return output_grad * 2 * (x - target), None
 
-    def __call__(self, *args, **kwargs):
-        return self.apply(*args, **kwargs)
 
+class _SGD(Optimizer):
+    """pure SGD"""
 
-def sgd(params, lr=1e-2):
-    """sgd优化器
+    def __init__(self, params, lr):
+        defaults = {"lr": lr}
+        super(_SGD, self).__init__(params, defaults)
 
-    :param params: List[Tensor]
-    :param lr: float
-    """
-    assert isinstance(params, list)
-    with torch.no_grad():
-        for i in range(len(params)):
-            params[i] -= lr * params[i].grad
-            params[i].grad.zero_()
-    # return params
+    def step(self, closure=None):
+        for group in self.param_groups:
+            params = group['params']
+            lr = group['lr']
+            for param in params:
+                param.data -= lr * param.grad
 
 
 def main():
@@ -103,22 +97,24 @@ def main():
     b2 = torch.zeros((1,), requires_grad=True, device=device)
 
     # 3. 训练
+    optim = _SGD([w1, w2, b1, b2], lr)
     # 此处省略batch_size, 方便理解
     # 网络模型: 2层全连接网络
     # loss: mse(mean square error) 均方误差
     # optim: sgd(stochastic gradient descent)  随机梯度下降. (虽然此处为批梯度下降，别在意这些细节)
     for i in range(501):
         # 1.forward
-        z = Linear()(x, w1, b1)
-        a = ReLU()(z)
-        y_pred = Linear()(a, w2, b2)
+        z = _Linear().apply(x, w1, b1)
+        a = _ReLU().apply(z)
+        y_pred = _Linear().apply(a, w2, b2)
         # 2. loss
-        loss = MSELoss()(y_pred, y_true)
+        loss = _MSELoss().apply(y_pred, y_true)
         # 3. backward
+        optim.zero_grad()
         loss.backward()
         # 4.update
         params = [w1, w2, b1, b2]
-        sgd(params, lr)
+        optim.step()
         if i % 10 == 0:
             print(i, "%.6f" % loss)
 
