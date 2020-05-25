@@ -7,6 +7,43 @@ import torch.nn.functional as F
 import math
 
 
+def _relu(x):
+    """(torch.relu())
+
+    :param x: shape[N/..., num_classes]
+    :return: shape = x.shape"""
+    return x * (x > 0).float()
+
+
+def _sigmoid(x):
+    """sigmoid(torch.sigmoid())
+
+    :param x: shape[N/..., num_classes]
+    :return: shape = x.shape"""
+
+    return 1 / (1 + torch.exp(-x))
+
+
+def _tanh(x):
+    """(torch.tanh())
+
+    :param x: shape[N/..., num_classes]
+    :return: shape = x.shape"""
+    return (torch.exp(2 * x) - 1) / (torch.exp(2 * x) + 1)
+    # or:
+    # return (torch.exp(x) - torch.exp(-x)) / (torch.exp(x) + torch.exp(-x))
+
+
+def _softmax(x, dim):
+    """softmax(torch.softmax())
+
+    :param x: shape[N, num_classes]
+    :param dim: int. 和为1的轴为哪个
+    :return: shape = x.shape"""
+
+    return torch.exp(x) / torch.sum(torch.exp(x), dim, True)
+
+
 def to_categorical(x, num_classes=None):
     """转热码(已测试)
 
@@ -71,25 +108,6 @@ def _mse_loss(y_pred, y_true):
     :return: shape = ()"""
 
     return torch.mean((y_true - y_pred) ** 2)
-
-
-def _sigmoid(x):
-    """sigmoid(torch.sigmoid())
-
-    :param x: shape[N, num_classes] or shape[N, C, 1, 1] ...Any
-    :return: shape = x.shape"""
-
-    return 1 / (1 + torch.exp(-x))
-
-
-def _softmax(x, dim):
-    """softmax(torch.softmax())
-
-    :param x: shape[N, num_classes]
-    :param dim: int. 和为1的轴为哪个
-    :return: shape = x.shape"""
-
-    return torch.exp(x) / torch.sum(torch.exp(x), dim, True)
 
 
 def _batch_norm(x, weight, bias, running_mean, running_var,
@@ -344,7 +362,7 @@ def _conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
 
 def _nearest_interpolate(x, output_size):
     """最近邻插值(F.interpolate(mode="nearest")).
-    notice: 与torch实现不同. (但是4dim 上采样1倍, 下采样1/2倍, 结果一致)
+    notice: 与torch实现不同. (但是上采样1倍, 下采样1/2倍, 结果一致)
 
     :param x: shape = (N, C, Hin, Win) or (C, Hin, Win)
     :return: shape = (N, C, *output_size)
