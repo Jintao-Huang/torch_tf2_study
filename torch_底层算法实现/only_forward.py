@@ -7,6 +7,8 @@ import torch.nn.functional as F
 import math
 
 
+# --------------------------------------------------- activation
+
 def _relu(x):
     """(torch.relu())
 
@@ -37,12 +39,23 @@ def _tanh(x):
 def _softmax(x, dim):
     """softmax(torch.softmax())
 
-    :param x: shape[N, num_classes]
+    :param x: shape[N/..., num_classes]
     :param dim: int. 和为1的轴为哪个
     :return: shape = x.shape"""
 
     return torch.exp(x) / torch.sum(torch.exp(x), dim, True)
 
+
+def _softplus(x, beta=1, threshold=20):
+    """(F.softplus())
+
+    :param x: shape[N/..., num_classes]
+    :param beta: (1/beta) * log(1 + e^(beta * x))
+    :param .threshold: 超过该阀值，按线性处理. 未实现"""
+    return 1 / beta * torch.log(1 + torch.exp(beta * x))
+
+
+# --------------------------------------------------- loss
 
 def to_categorical(x, num_classes=None):
     """转热码(已测试)
@@ -109,6 +122,8 @@ def _mse_loss(y_pred, y_true):
 
     return torch.mean((y_true - y_pred) ** 2)
 
+
+# --------------------------------------------------- layers
 
 def _batch_norm(x, weight, bias, running_mean, running_var,
                 training=False, momentum=0.1, eps=1e-5):
