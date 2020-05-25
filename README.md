@@ -21,6 +21,6 @@ python3 torch_回归_底层.py
 python3 mnist_torch.py
 
 ------------------------
-python3 mnist_torch_with_tensorboard.py
+python3 cifar10_torch_with_tensorboard.py
 ```
 

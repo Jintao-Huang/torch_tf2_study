@@ -52,6 +52,17 @@ def _binary_cross_entropy(y_pred, y_true, with_logits=False):
     return torch.mean(y_true * -torch.log(y_pred) + (1 - y_true) * -torch.log(1 - y_pred))
 
 
+def _nll_loss(y_pred, y_true):
+    """The negative log likelihood loss(F.nll_loss())
+
+    :param y_pred: Tensor[N/..., num_classes] Float
+    :param y_true: Tensor[N/...] Long
+    :return: Tensor[标量]
+    """
+    y_true = to_categorical(y_true, y_pred.shape[-1])
+    return torch.mean(torch.sum(-y_true * y_pred, dim=-1))
+
+
 def _mse_loss(y_pred, y_true):
     """均方误差损失(F.mse_loss() 只实现了部分功能)
 
@@ -127,6 +138,17 @@ def _batch_norm(x, weight, bias, running_mean, running_var,
     # scale = weight * torch.rsqrt(var + eps)
     # bias = bias - mean * scale
     # return x * scale + bias
+
+
+def _group_norm(x, num_groups, weight, bias, eps=1e-5):
+    """不对batch_size做norm. 只对通道的组做norm(torch.group_norm())"""
+    assert x.shape[1] % num_groups == 0
+    x = torch.reshape(x, (x.shape[0], num_groups, x.shape[1] // num_groups, *x.shape[-2:]))
+    mean = torch.mean(x, dim=(2, 3, 4), keepdim=True)  # shape(N, num_groups)
+    var = torch.var(x, dim=(2, 3, 4), unbiased=False, keepdim=True)
+    x = (x - mean) * torch.rsqrt(var + eps)
+    x = torch.reshape(x, (x.shape[0], -1, *x.shape[-2:]))
+    return x * weight[:, None, None] + bias[:, None, None]
 
 
 def _dropout(x, drop_p, training):
