@@ -14,7 +14,15 @@ def _relu(x):
 
     :param x: shape[N/..., num_classes]
     :return: shape = x.shape"""
-    return x * (x > 0).float()
+    return torch.max(x, torch.tensor(0.))
+    # or:
+    # return x * (x > 0).float()
+
+
+def _leaky_relu(x, negative_slope=0.01):
+    """(F.leaky_relu())"""
+    zero = torch.tensor(0.)  # Tensor. not int/float
+    return torch.max(x, zero) + negative_slope * torch.min(x, zero)
 
 
 def _sigmoid(x):

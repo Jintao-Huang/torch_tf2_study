@@ -44,13 +44,14 @@ def binary_focal_loss(y_pred, y_true, gamma=2, with_logits=False):
 
 
 def weighted_binary_focal_loss(y_pred, y_true, alpha=0.25, gamma=2, with_logits=False, reduction="mean"):
-    """f(x) = -alpha * (1 - x)^a * ln(x) = alpha * (1 - x)^a * CELoss(x)(已测试)
+    """f(x) = -alpha * (1 - x)^a * ln(x) = alpha * (1 - x)^a * CELoss(x) (已测试)
 
     :param y_pred: shape = (N,) or (...)
     :param y_true: shape = (N,) or (...)
     :param alpha: 负样本与正样本的权重. The weight of the negative sample and the positive sample
         = alpha * positive + (1 - alpha) * negative
     :param with_logits: y_pred是否未经过sigmoid"""
+
     if reduction == "mean":
         func = torch.mean
     elif reduction == "sum":
@@ -61,6 +62,7 @@ def weighted_binary_focal_loss(y_pred, y_true, alpha=0.25, gamma=2, with_logits=
         y_pred = torch.sigmoid(y_pred)
     y_pred = torch.clamp(y_pred, 1e-6, 1 - 1e-6)
     # 前式与后式关于0.5对称(The former and the latter are symmetric about 0.5)
+    # y_true 为-1. 即: 既不是正样本、也不是负样本。
     return func((alpha * y_true * -torch.log(y_pred) * (1 - y_pred) ** gamma +
                  (1 - alpha) * (1 - y_true) * -torch.log(1 - y_pred) * y_pred ** gamma) * (y_true >= 0).float())
 
