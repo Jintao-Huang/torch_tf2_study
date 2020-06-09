@@ -6,15 +6,21 @@ import torch
 import math
 
 
+def _box_area(boxes):
+    """copy from torchvision.ops.boxes.box_area(). """
+    return (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+
+
 def _box_iou(boxes1, boxes2):
-    """copy from torchvision.ops.boxes.box_iou(). [0., 1.]"""
+    """copy from torchvision.ops.boxes.box_iou().
+    :return: range: [0., 1.]"""
     area1 = box_area(boxes1)
     area2 = box_area(boxes2)
 
     lt = torch.max(boxes1[:, None, :2], boxes2[None, :, :2])  # [N, M, 2]
     rb = torch.min(boxes1[:, None, 2:], boxes2[None, :, 2:])  # [N, M, 2]
 
-    wh = (rb - lt).clamp(min=0)  # [N, M, 2]
+    wh = (rb - lt).clamp_min(0)  # [N, M, 2]
     inter = wh[:, :, 0] * wh[:, :, 1]  # [N, M]
     union = area1[:, None] + area2[None, :] - inter
     iou = inter / union
@@ -22,16 +28,18 @@ def _box_iou(boxes1, boxes2):
 
 
 def box_giou(boxes1, boxes2):
-    """Generalized IoU (https://arxiv.org/pdf/1902.09630.pdf).  [-1., 1.]
+    """Generalized IoU (https://arxiv.org/pdf/1902.09630.pdf).
 
-    Solved the situation where the IoU is zero, Cannot reverse transfer the gradient"""
+    Solved the situation where the IoU is zero, Cannot reverse transfer the gradient
+
+    :return: range: [-1., 1.]"""
     # 1. calculate iou
     area1 = box_area(boxes1)
     area2 = box_area(boxes2)
 
     lt_inner = torch.max(boxes1[:, None, :2], boxes2[None, :, :2])  # [N, M, 2]
     rb_inner = torch.min(boxes1[:, None, 2:], boxes2[None, :, 2:])  # [N, M, 2]
-    wh_inner = (rb_inner - lt_inner).clamp(min=0)  # [N, M, 2]
+    wh_inner = (rb_inner - lt_inner).clamp_min(0)  # [N, M, 2]
 
     inter = wh_inner[:, :, 0] * wh_inner[:, :, 1]
     union = area1[:, None] + area2[None, :] - inter
@@ -47,17 +55,18 @@ def box_giou(boxes1, boxes2):
 
 
 def box_diou(boxes1, boxes2):
-    """Distance IoU (https://arxiv.org/pdf/1911.08287.pdf).  [-1., 1.]
+    """Distance IoU (https://arxiv.org/pdf/1911.08287.pdf).
 
-    the overlapping area and the distance between the center points
-    are considered at the same time"""
+    the overlapping area and the distance between the center points are considered at the same time
+    
+    :return: range: [-1., 1.]"""
     # 1. calculate iou
     area1 = box_area(boxes1)
     area2 = box_area(boxes2)
 
     lt_inner = torch.max(boxes1[:, None, :2], boxes2[None, :, :2])  # [N, M, 2]
     rb_inner = torch.min(boxes1[:, None, 2:], boxes2[None, :, 2:])  # [N, M, 2]
-    wh_inner = (rb_inner - lt_inner).clamp(min=0)  # [N, M, 2]
+    wh_inner = (rb_inner - lt_inner).clamp_min(0)  # [N, M, 2]
 
     inter = wh_inner[:, :, 0] * wh_inner[:, :, 1]
     union = area1[:, None] + area2[None, :] - inter
@@ -82,10 +91,11 @@ def box_diou(boxes1, boxes2):
 
 
 def box_ciou(boxes1, boxes2):
-    """Complete IoU Loss (https://arxiv.org/pdf/2005.03572.pdf).  [-1., 1.]
+    """Complete IoU Loss (https://arxiv.org/pdf/2005.03572.pdf).
 
-    The consistency of the aspect ratio between
-    the anchor boxes and the target boxes is also extremely important"""
+    The consistency of the aspect ratio between the anchor boxes and the target boxes is also extremely important
+
+    :return: range: [-1., 1.]"""
 
     # 1. calculate iou
     wh_boxes1 = boxes1[:, 2:] - boxes1[:, :2]  # shape[N, 2]. 防止重复计算(Prevent double counting)
@@ -95,7 +105,7 @@ def box_ciou(boxes1, boxes2):
 
     lt_inner = torch.max(boxes1[:, None, :2], boxes2[None, :, :2])  # [N, M, 2]
     rb_inner = torch.min(boxes1[:, None, 2:], boxes2[None, :, 2:])  # [N, M, 2]
-    wh_inner = (rb_inner - lt_inner).clamp(min=0)  # [N, M, 2]
+    wh_inner = (rb_inner - lt_inner).clamp_min(0)  # [N, M, 2]
 
     inter = wh_inner[:, :, 0] * wh_inner[:, :, 1]
     union = area1[:, None] + area2[None, :] - inter
@@ -122,24 +132,3 @@ def box_ciou(boxes1, boxes2):
     alpha = (iou >= 0.5).float() * (v / (1 - iou + v))
     ciou = iou - distance2_center / distance2_outer - alpha * v
     return ciou
-
-
-def iou_loss(iou):
-    """Loss-iou
-
-    :param iou: shape(N, M). anchors, ground-truth box
-    :return:
-    """
-    return 1 - iou.max(dim=1)[0]  # 一个anchors只能对应一个gt box
-
-
-def giou_loss(giou):
-    return 1 - giou.max(dim=1)[0]
-
-
-def diou_loss(diou):
-    return 1 - diou.max(dim=1)[0]
-
-
-def ciou_loss(ciou):
-    return 1 - ciou.max(dim=1)[0]
