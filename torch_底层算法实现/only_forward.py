@@ -592,3 +592,105 @@ def _adaptive_max_pool2d(x, output_size):
             output[..., i, j] = torch.max(torch.max(x[:, pos_h, pos_w], dim=-2)[0], dim=-1)[0]  # dim=(-2, -1)
 
     return output
+
+
+def _rnn_cell(x0, h0, weight, bias=True):
+    """h1/y1 = tanh(x0 @ W_ih^T + b_ih + h0 @ W_hh^T + b_hh)  (已测试)
+
+    :param x0: shape[N, Cin].
+    :param h0: shape[N, Ch]
+    :param weight: List(weight_ih: shape[Ch, Cin], weight_hh: shape[Ch, Ch],
+            bias_ih: shape[Ch], bias_hh: shape[Ch])
+            len(4 or 2)
+    :param bias: bool. 是否有bias
+    :return: y1/h1: shape[N, Ch]
+    """
+    batch_size = x0.shape[0]
+    if h0 is None:
+        h0 = torch.zeros(batch_size, weight[0].shape[0])  # weight[0].shape[0]: Ch
+
+    assert x0.shape[0] == h0.shape[0] and isinstance(bias, bool)  # N == N
+    # weight  不经过验证
+
+    y1 = torch.tanh(x0 @ weight[0].t() + (weight[2] if bias is not None else 0) +
+                    h0 @ weight[1].t() + (weight[3] if bias is not None else 0))
+    return y1
+
+
+def _lstm_cell(x0, h0, c0, weight, bias=True):
+    """(已测试)
+
+    :param x0: shape[N, Cin].
+    :param h0: shape[N, Ch]
+    :param c0: shape[N, Ch]
+    :param weight: List(weight_ih: shape[Ch*4, Cin], weight_hh: shape[Ch*4, Ch],
+            bias_ih: shape[Ch*4], bias_hh: shape[Ch*4]). (i, f, g, o)
+            len(4 or 2)
+    :param bias: bool. 是否有bias
+    :return: tuple(y1/h1: shape[N, Ch], c1: Tensor[N, Ch])
+    """
+    # i = σ(x0 @ Wii^T + bii + h0 @ Whi^T + bhi)
+    # f = σ(x0 @ Wif^T + bif + h0 @ Whf^T + bhf)
+    # g = tanh(x0 @ Wig^T + big + h0 @ Whg^T + bhg)
+    # o = σ(x0 @ Wio^T + bio + h0 @ Who^T + bho)
+    # c1 = f * c0 + i * g   # Hadamard乘积
+    # h1 = o * tanh(c1)
+    batch_size = x0.shape[0]
+    c_hide = weight[0].shape[0] // 4  # Ch
+    if h0 is None:
+        h0 = torch.zeros(batch_size, c_hide)  # weight[0].shape[0]: Ch
+    if c0 is None:
+        c0 = torch.zeros(batch_size, c_hide)
+    assert x0.shape[0] == h0.shape[0] == c0.shape[0] and isinstance(bias, bool)  # N == N == N
+    # weight  不经过验证
+
+    i = torch.sigmoid(x0 @ weight[0][0:c_hide].t() + (weight[2][0:c_hide] if bias is not None else 0) +
+                      h0 @ weight[1][0:c_hide].t() + (weight[3][0:c_hide] if bias is not None else 0))
+    f = torch.sigmoid(
+        x0 @ weight[0][c_hide:c_hide * 2].t() + (weight[2][c_hide:c_hide * 2] if bias is not None else 0) +
+        h0 @ weight[1][c_hide:c_hide * 2].t() + (weight[3][c_hide:c_hide * 2] if bias is not None else 0))
+    g = torch.tanh(
+        x0 @ weight[0][c_hide * 2:c_hide * 3].t() + (weight[2][c_hide * 2:c_hide * 3] if bias is not None else 0) +
+        h0 @ weight[1][c_hide * 2:c_hide * 3].t() + (weight[3][c_hide * 2:c_hide * 3] if bias is not None else 0))
+    o = torch.sigmoid(
+        x0 @ weight[0][c_hide * 3:c_hide * 4].t() + (weight[2][c_hide * 3:c_hide * 4] if bias is not None else 0) +
+        h0 @ weight[1][c_hide * 3:c_hide * 4].t() + (weight[3][c_hide * 3:c_hide * 4] if bias is not None else 0))
+    c1 = f * c0 + i * g
+    h1 = o * torch.tanh(c1)
+    return h1, c1
+
+
+def _gru_cell(x0, h0, weight, bias=True):
+    """(已测试)
+
+    :param x0: shape[N, Cin].
+    :param h0: shape[N, Ch]
+    :param weight: List(weight_ih: shape[Ch*3, Cin], weight_hh: shape[Ch*3, Ch],
+            bias_ih: shape[Ch*3], bias_hh: shape[Ch*3]). (r, z, n)
+            len(4 or 2)
+    :param bias: bool. 是否有bias
+    :return: y1/h1: shape[N, Ch]
+    """
+
+    batch_size = x0.shape[0]
+    c_hide = weight[0].shape[0] // 3  # Ch
+    if h0 is None:
+        h0 = torch.zeros(batch_size, c_hide)  # weight[0].shape[0]: Ch
+
+    assert x0.shape[0] == h0.shape[0] and isinstance(bias, bool)  # N == N == N
+    # weight  不经过验证
+
+    # r = σ(x0 @ Wir^T + bir + h0 @ Whr^T + bhr)  
+    # z = σ(x0 @ Wiz^T + biz + h0 @ Whz^T + bhz)  
+    # n = tanh(x0 @ Win^T + bin + r*(h @ Whn^T + bhn))  
+    # h1/y1 = (1 − z) * n + z * h0
+    r = torch.sigmoid(x0 @ weight[0][0:c_hide].t() + (weight[2][0:c_hide] if bias is not None else 0) +
+                      h0 @ weight[1][0:c_hide].t() + (weight[3][0:c_hide] if bias is not None else 0))
+    z = torch.sigmoid(
+        x0 @ weight[0][c_hide:c_hide * 2].t() + (weight[2][c_hide:c_hide * 2] if bias is not None else 0) +
+        h0 @ weight[1][c_hide:c_hide * 2].t() + (weight[3][c_hide:c_hide * 2] if bias is not None else 0))
+    n = torch.tanh(
+        x0 @ weight[0][c_hide * 2:c_hide * 3].t() + (weight[2][c_hide * 2:c_hide * 3] if bias is not None else 0) +
+        r * (h0 @ weight[1][c_hide * 2:c_hide * 3].t() + (weight[3][c_hide * 2:c_hide * 3] if bias is not None else 0)))
+    h1 = (1 - z) * n + z * h0
+    return h1
