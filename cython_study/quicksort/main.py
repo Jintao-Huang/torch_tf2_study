@@ -50,6 +50,6 @@ l = []
 for i in range(100000):
     l.append(randint(0, 100000))
 t = clock()
-quick_sort(l, 0, 100000 - 1)  # cython
+quick_sort(l)  # cython
 print(clock() - t)
 print(l[:100])

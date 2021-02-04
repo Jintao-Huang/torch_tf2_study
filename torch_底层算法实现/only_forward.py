@@ -5,50 +5,44 @@
 import torch
 import torch.nn.functional as F
 import math
+from torch import Tensor
 
 
 # --------------------------------------------------- activation
 
-def _relu(x):
-    """(torch.relu())
+def _relu(x: Tensor) -> Tensor:
+    """(F.relu()) - 已重写简化
 
-    :param x: shape[N/..., num_classes]
+    :param x: shape = (N, In) or (N, Cin, H, W)
     :return: shape = x.shape"""
-    return torch.max(x, torch.tensor(0.))
+    return torch.where(x > 0, x, torch.tensor(0.))
     # or:
     # return x * (x > 0).float()
 
 
-def _leaky_relu(x, negative_slope=0.01):
-    """(F.leaky_relu())"""
-    zero = torch.tensor(0.)  # Tensor. not int/float
-    return torch.max(x, zero) + negative_slope * torch.min(x, zero)
+def _leaky_relu(x: Tensor, negative_slope: float = 0.01) -> Tensor:
+    """(F.leaky_relu()) - 已重写简化"""
+    return torch.where(x > 0, x, negative_slope * x)
 
 
-def _sigmoid(x):
-    """sigmoid(torch.sigmoid())
-
-    :param x: shape[N/..., num_classes]
-    :return: shape = x.shape"""
+def _sigmoid(x: Tensor) -> Tensor:
+    """sigmoid(F.sigmoid()) - 已重写简化"""
 
     return 1 / (1 + torch.exp(-x))
 
 
-def _tanh(x):
-    """(torch.tanh())
-
-    :param x: shape[N/..., num_classes]
-    :return: shape = x.shape"""
+def _tanh(x: Tensor) -> Tensor:
+    """(F.tanh()) - 已重写简化"""
     return (torch.exp(2 * x) - 1) / (torch.exp(2 * x) + 1)
     # or:
     # return (torch.exp(x) - torch.exp(-x)) / (torch.exp(x) + torch.exp(-x))
 
 
-def _softmax(x, dim):
-    """softmax(torch.softmax())
+def _softmax(x: Tensor, dim: int) -> Tensor:
+    """softmax(F.softmax()) - 已重写简化
 
-    :param x: shape[N/..., num_classes]
-    :param dim: int. 和为1的轴为哪个
+    :param x: shape = (N, In) or (N, Cin, H, W)
+    :param dim: int. 一般dim设为-1(表示输出Tensor的和为1.的dim为哪个)
     :return: shape = x.shape"""
 
     return torch.exp(x) / torch.sum(torch.exp(x), dim, True)
@@ -65,26 +59,21 @@ def _softplus(x, beta=1, threshold=20):
 
 # --------------------------------------------------- loss
 
-def to_categorical(x, num_classes=None):
-    """转热码(已测试)
+def to_categorical(x: Tensor, num_classes: int) -> Tensor:
+    """转热码 - 已重写简化
 
-    :param x: shape = (N,) or (...)
-    :param num_classes: 默认 num_classes = max(x) + 1
-    :return: shape = (N, num_classes) or (..., num_classes). float32"""
+    :param x: shape = (...). int
+    :param num_classes: int. 分类数
+    :return: shape = (..., num_classes). float32"""
 
-    assert x.dtype in (torch.int32, torch.int64), "x的类型只支持torch.int32与torch.int64"
-
-    x_max = torch.max(x)
-    num_classes = num_classes or x_max + 1
-    assert num_classes >= x_max + 1, "num_classes 必须 >= max(x) + 1"
     return torch.eye(num_classes, dtype=torch.float, device=x.device)[x]
 
 
-def _cross_entropy(y_pred, y_true):
-    """交叉熵损失函数(F.cross_entropy() 只实现了部分功能). y_pred 未过softmax
+def _cross_entropy(y_pred: Tensor, y_true: Tensor) -> Tensor:
+    """交叉熵损失函数(F.cross_entropy()). y_pred 未过softmax
 
-    :param y_pred: shape = (N, num_classes) or (..., num_classes)
-    :param y_true: shape = (N,) or (...)
+    :param y_pred: shape = (N, num_classes)
+    :param y_true: shape = (N,)
     :return: shape = ()"""
 
     y_pred = torch.clamp_min(torch.softmax(y_pred, dim=-1), 1e-6)  # 防log(0)
@@ -96,8 +85,8 @@ def _cross_entropy(y_pred, y_true):
 def _binary_cross_entropy(y_pred, y_true, with_logits=False):
     """交叉熵损失函数(F.binary_cross_entropy() and F.binary_cross_entropy_with_logits())
 
-    :param y_pred: shape = (N,) or (...)
-    :param y_true: shape = (N,) or (...)
+    :param y_pred: shape = (N,)
+    :param y_true: shape = (N,)
     :param with_logits: y_pred是否未过sigmoid
     :return: shape = ()"""
 
@@ -132,46 +121,36 @@ def _mse_loss(y_pred, y_true):
 
 
 # --------------------------------------------------- layers
-
-def _batch_norm(x, weight, bias, running_mean, running_var,
-                training=False, momentum=0.1, eps=1e-5):
-    """BN(torch.batch_norm())
+def _batch_norm(x: Tensor, weight: Tensor, bias: Tensor, running_mean: Tensor, running_var: Tensor,
+                training: bool = False, momentum: float = 0.1, eps: float = 1e-5) -> Tensor:
+    """BN(F.batch_norm()) - 已重写简化
 
     :param x: shape = (N, In) or (N, Cin, H, W)
-    :param weight: gamma, shape = (In,)
-    :param bias: beta, shape = (In,)
+    :param weight: shape = (In,) 或 (Cin,) 下同
+    :param bias: shape = (In,)
     :param running_mean: shape = (In,)
     :param running_var: shape = (In,)
-
-    :param momentum(同torch): 动量实际为 1 - momentum
+    :param momentum: (同torch)动量实际为 1 - momentum
     :return: shape = x.shape"""
 
-    # training:
-    #   归一化x 使用x.mean(), x.var()(非估计).
-    #   running_mean, running_var进行滑动平均. 无偏估计(forward时更新)
-    #   weight, bias (backward时更新)
-    #
-    # not training:
-    #   归一化x 使用 running_mean, running_var
-    #   running_mean, running_var, weight, bias 不更新
-
-    assert x.dim() in (2, 4)
-
-    dim = 0 if x.dim() == 2 else (0, 2, 3)
     if training:
-        # 归一化x 使用x.mean(), x.var()
-        mean = torch.mean(x, dim)  # shape(In,)
-        var = torch.var(x, dim, False)  # 不是估计值
-        # running_mean, running_var进行滑动平均 (forward时更新)
-        running_mean[:] = (1 - momentum) * running_mean + momentum * mean
-        running_var[:] = (1 - momentum) * running_var + momentum * torch.var(x, dim, True)  # 无偏估计
+        if x.dim() == 2:
+            _dim = (0,)
+        elif x.dim() == 4:
+            _dim = (0, 2, 3)
+        else:
+            raise ValueError("x dim error")
+        mean = eval_mean = torch.mean(x, _dim)  # 估计
+        eval_var = torch.var(x, _dim, unbiased=True)  # 无偏估计, x作为样本
+        var = torch.var(x, _dim, unbiased=False)  # 用于标准化, x作为总体
+        running_mean[:] = (1 - momentum) * running_mean + momentum * eval_mean
+        running_var[:] = (1 - momentum) * running_var + momentum * eval_var  # 无偏估计
     else:
-        # 归一化x 使用 running_mean, running_var
         mean = running_mean
         var = running_var
-
-    # 既满足2D，也满足4D
-    if x.dim() == 4:
+    # 2D时, mean.shape = (In,)
+    # 4D时, mean.shape = (Cin, 1, 1)
+    if x.dim() == 4:  # 扩维
         mean, var = mean[:, None, None], var[:, None, None]
         weight, bias = weight[:, None, None], bias[:, None, None]
     return (x - mean) * torch.rsqrt(var + eps) * weight + bias
@@ -208,27 +187,18 @@ def _dropout(x, drop_p, training):
     return x / keep_p * keep_tensors  # 只有该步会反向传播
 
 
-def _zero_padding2d(x, padding):
-    """零填充(F.pad()).
-    notice: F.pad()不支持padding为int型. 此函数支持
+def _zero_padding2d(x: Tensor, padding: int) -> Tensor:
+    """零填充(F.pad()) - 已重写简化
 
-    :param x: shape = (N, Cin, Hin, Win) or (Cin, Hin, Win) or (Hin, Win)
-    :param padding: Union[int, tuple(left, right, top, bottom)]
-    :return: shape = (..., Hout, Wout)"""
+    :param x: shape = (N, Cin, Hin, Win)
+    :param padding: int
+    :return: shape = (N, Cin, Hout, Wout)"""
 
-    if padding == 0:
-        return x
-    assert x.dim() in (2, 3, 4)
-    if isinstance(padding, int):
-        padding = padding, padding, padding, padding
-    elif len(padding) != 4:
-        padding = *padding, 0, 0, 0
-    output = torch.zeros((*x.shape[:-2],  # N, Cin
-                          x.shape[-2] + padding[2] + padding[3],  # Hout
-                          x.shape[-1] + padding[0] + padding[1]), dtype=x.dtype, device=x.device)  # Wout
-
-    # output.shape[-2]-padding[3] 书写方式 为防止 padding[3] == 0 的错误
-    output[..., padding[2]:output.shape[-2] - padding[3], padding[0]:output.shape[-1] - padding[1]] = x
+    output = torch.zeros((*x.shape[:2],  # N, Cin
+                          x.shape[-2] + 2 * padding,  # Hout
+                          x.shape[-1] + 2 * padding), dtype=x.dtype, device=x.device)  # Wout
+    h_out, w_out = output.shape[-2:]
+    output[:, :, padding:h_out - padding, padding:w_out - padding] = x
     return output
 
 
@@ -312,23 +282,50 @@ def _avg_pool2d(x, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=Fa
     return output
 
 
-def _linear(x, weight, bias=None):
-    """全连接层(F.linear())
+def _linear(x: Tensor, weight: Tensor, bias: Tensor = None) -> Tensor:
+    """全连接层(F.linear()) - 已重写简化
 
     :param x: shape = (N, In)
     :param weight: shape = (Out, In)
     :param bias: shape = (Out,)
     :return: shape = (N, Out)"""
 
-    assert x.shape[1] == weight.shape[1], "weight.shape[1] != x.shape[1]"
-    if bias is None:
-        return x @ weight.t()
-    assert weight.shape[0] == bias.shape[0], "weight.shape[0] != bias.shape[0]"
-    return x @ weight.t() + bias
+    return x @ weight.t() + bias if bias is not None else 0.
 
 
-def _conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
-    """2d卷积(torch.conv2d())  有略微误差
+def _conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, padding: int = 0) -> Tensor:
+    """2d卷积(F.conv2d()) - 已重写简化
+
+    :param x: shape = (N, Cin, Hin, Win)
+    :param weight: shape = (Cout, Cin, KH, KW)
+    :param bias: shape = (Cout,)
+    :param stride: int
+    :param padding: int
+    :return: shape = (N, Cout, Hout, Wout)
+    """
+    if padding:
+        x = _zero_padding2d(x, padding)
+    kernel_size = weight.shape[-2:]
+    # Out(H, W) = (In(H, W) + 2 * padding − kernel_size) // stride + 1
+    output_h, output_w = (x.shape[2] - kernel_size[0]) // stride + 1, \
+                         (x.shape[3] - kernel_size[1]) // stride + 1
+    output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
+                         dtype=x.dtype, device=x.device)
+    for i in range(output.shape[2]):  # Hout
+        for j in range(output.shape[3]):  # # Wout
+            h_start, w_start = i * stride, j * stride
+            h_pos, w_pos = slice(h_start, (h_start + kernel_size[0])), \
+                           slice(w_start, (w_start + kernel_size[1]))
+
+            output[:, :, i, j] = torch.sum(
+                # N, K_Cout, K_Cin, KH, KW
+                x[:, None, :, h_pos, w_pos] * weight[None, :, :, :, :], dim=(-3, -2, -1)) \
+                                 + (bias if bias is not None else 0)
+    return output
+
+
+def __conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    """2d卷积(torch.conv2d())  有略微误差 - 原版
 
     :param x: shape = (N, Cin, Hin, Win)
     :param weight: shape = (Cout, K_Cin, KH, KW)  # 当groups = 1: K_Cin = Cin
