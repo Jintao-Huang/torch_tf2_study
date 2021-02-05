@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 import torch.nn as nn
 import torch
 import time
+import os
 
 
 class ConvBNReLU(nn.Sequential):
@@ -32,15 +33,15 @@ class SimpleCNN(nn.Module):
 
     def __init__(self):
         super(SimpleCNN, self).__init__()
-        self.features = nn.Sequential(
+        self.features = nn.Sequential(  # 特征提取器
             ConvBlock(1, 16, 3, 2, 1, False),  # 14
-            ConvBlock(16, 32, 3, 2, 1, False)  # 7
+            ConvBlock(16, 64, 3, 2, 1, False)  # 7
         )
-        self.classifier = nn.Sequential(
-            nn.Linear(7 * 7 * 32, 256),
+        self.classifier = nn.Sequential(  # 分类器
+            nn.Linear(7 * 7 * 64, 512),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.2),  # drop_p
-            nn.Linear(256, 10),
+            nn.Dropout(0.25),  # drop_p
+            nn.Linear(512, 10),
         )
 
     def forward(self, x):
@@ -50,13 +51,17 @@ class SimpleCNN(nn.Module):
         return x
 
 
+def save_params(model, filename):
+    torch.save(model.state_dict(), filename)
+
+
+def load_params(model, filepath):
+    return model.load_state_dict(torch.load(filepath))
+
+
 def get_acc(pred, label):
     pred = torch.argmax(pred, dim=1)
     return torch.mean((pred == label).float())
-
-
-def save_params(model, filename):
-    torch.save(model.state_dict(), filename)
 
 
 def train(model, loss_fn, optim, train_loader, epoch, device):
@@ -73,7 +78,7 @@ def train(model, loss_fn, optim, train_loader, epoch, device):
             acc = get_acc(pred, label)
             loss_total += loss.item()
             acc_total += acc.item()
-            if j % 10 == 0:
+            if j % 20 == 0:
                 loss = loss_total / (j + 1)
                 acc = acc_total / (j + 1)
                 end_time = time.time()
@@ -98,7 +103,7 @@ def test(model, test_loader, device):
             # 后续操作
             acc = get_acc(pred, label)
             acc_total += acc.item()
-            if i % 10 == 0:
+            if i % 20 == 0:
                 acc = acc_total / (i + 1)
                 end_time = time.time()
                 print("\r>> %d/%d| Acc: %.2f%%| Time: %.4f" %
@@ -111,7 +116,8 @@ def test(model, test_loader, device):
 
 
 def main():
-    epoch = 5
+    epoch = 10
+    save_model_name = "mnist_model.pth"  # 保存的模型名
 
     if torch.cuda.is_available():
         device = torch.device('cuda')
@@ -130,9 +136,10 @@ def main():
 
     # 2. 建立网络、损失、优化器
     model = SimpleCNN().to(device)
+    if os.path.exists(save_model_name):
+        load_params(model, save_model_name)
     loss_fn = nn.CrossEntropyLoss()
-    optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=1e-4, nesterov=True)
-    # optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=1e-4)
+    optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=1e-4)
     # optim = torch.optim.Adam(model.parameters(), 5e-4, weight_decay=1e-4)
 
     # 3. 训练集训练
@@ -141,7 +148,7 @@ def main():
     # 测试集测试
     print("---------------------- Test")
     test(model, test_loader, device)
-    save_params(model, "mnist_model.pth")
+    save_params(model, save_model_name)
 
 
 if __name__ == '__main__':

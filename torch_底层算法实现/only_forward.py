@@ -44,7 +44,7 @@ def _softmax(x: Tensor, dim: int) -> Tensor:
     :param x: shape = (N, In)
     :param dim: int. 一般dim设为-1(表示输出Tensor的和为1.的dim为哪个)
     :return: shape = x.shape"""
-
+    # shape(N, In) / shape(N, 1), 若dim = -1
     return torch.exp(x) / torch.sum(torch.exp(x), dim, True)
 
 
@@ -293,62 +293,6 @@ def _conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, pad
     return output
 
 
-def __conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
-    """2d卷积(torch.conv2d())  有略微误差 - 原版
-
-    :param x: shape = (N, Cin, Hin, Win)
-    :param weight: shape = (Cout, K_Cin, KH, KW)  # 当groups = 1: K_Cin = Cin
-        实际上：每一组weight. K_Cin = Cin / groups.
-        Cout =  K_Cout * groups[只是groups组的weight叠起来 -> Cout].
-    :param bias: shape = (Cout,)
-    :param stride: Union[int, tuple(H, W)]
-    :param padding: Union[int, tuple(H, W)]
-    :param dilation: Union[int, tuple(H, W)]. 膨胀卷积/空洞卷积
-    :param groups: int. 分组卷积
-    :return: shape = (N, Cout, Hout, Wout)
-    """
-
-    assert x.shape[1] == weight.shape[1] * groups, "x.shape[1] != weight.shape[1] * groups"
-    assert weight.shape[0] % groups == 0, "weight.shape[0] % groups != 0"
-    if isinstance(stride, int):
-        stride = stride, stride
-    if isinstance(padding, int):
-        padding = padding, padding, padding, padding
-    else:
-        padding = padding[1], padding[1], padding[0], padding[0]
-    if isinstance(dilation, int):
-        dilation = dilation, dilation
-    # -----------------------------
-    if padding:
-        x = F.pad(x, padding)
-    kernel_size = dilation[0] * (weight.shape[-2] - 1) + 1, dilation[1] * (weight.shape[-1] - 1) + 1
-
-    # Out(H, W) = (In(H, W) + 2 * padding − kernel_size) // stride + 1. 已经算上了padding
-    output_h, output_w = (x.shape[2] - kernel_size[0]) // stride[0] + 1, \
-                         (x.shape[3] - kernel_size[1]) // stride[1] + 1
-    output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
-                         dtype=x.dtype, device=x.device)
-    # 计算复杂度: (N * K_Cout * K_Cin * KH * KW) * groups * Hout * Wout
-    # 如果groups == 1: N * KH * KW * Cin * Cout * Hout * Wout
-    # 如果groups == Cin(深度可分离卷积): N * KH * KW * groups * (Cout / Cin) * Hout * Wout  (复杂度显著降低)
-    for g in range(groups):  # output.shape[1]/Cout == K_Cout * groups
-        cin_pos = slice(weight.shape[1] * g, weight.shape[1] * (g + 1))
-        # weight.shape[0] // groups -> K_Cout
-        cout_pos = slice(weight.shape[0] // groups * g, weight.shape[0] // groups * (g + 1))
-        for i in range(output.shape[2]):  # Hout
-            for j in range(output.shape[3]):  # # Wout
-                h_start, w_start = i * stride[0], j * stride[1]
-                h_pos, w_pos = slice(h_start, (h_start + kernel_size[0]), dilation[0]), \
-                               slice(w_start, (w_start + kernel_size[1]), dilation[1])
-
-                output[:, cout_pos, i, j] = torch.sum(
-                    # N, K_Cout, K_Cin, KH, KW
-                    x[:, None, cin_pos, h_pos, w_pos] * weight[None, cout_pos, :, :, :], dim=(-3, -2, -1)) \
-                                            + (bias[cout_pos] if bias is not None else 0)
-
-    return output
-
-
 def _nearest_interpolate(x: Tensor, size: Tuple[int, int] = None, scale_factor: float = None) -> Tensor:
     """最近邻插值(F.interpolate(mode="nearest")). 与torch实现相同，与cv实现是否相同未知 - 已重写简化
 
@@ -361,7 +305,7 @@ def _nearest_interpolate(x: Tensor, size: Tuple[int, int] = None, scale_factor: 
     if scale_factor:
         size = int(in_size[0] * scale_factor), int(in_size[1] * scale_factor)  # out_size
     step_h, step_w = in_size[0] / size[0], in_size[1] / size[1]  # 步长
-    axis_h = torch.arange(0, in_size[0], step_h, device=x.device).long()  # h坐标轴
+    axis_h = torch.arange(0, in_size[0], step_h, device=x.device).long()  # h坐标轴 floor
     axis_w = torch.arange(0, in_size[1], step_w, device=x.device).long()  # w坐标轴
     grid_h, grid_w = torch.meshgrid(axis_h, axis_w)  # 生成网格
     output = x[:, :, grid_h, grid_w]
