@@ -4,7 +4,6 @@
 # 为防止与torch中的函数搞混，自己实现的函数前会加上 `_`
 import torch
 import torch.nn.functional as F
-import math
 from torch import Tensor
 from typing import Tuple
 
@@ -42,20 +41,11 @@ def _tanh(x: Tensor) -> Tensor:
 def _softmax(x: Tensor, dim: int) -> Tensor:
     """softmax(F.softmax()) - 已重写简化
 
-    :param x: shape = (N, In) or (N, Cin, H, W)
+    :param x: shape = (N, In)
     :param dim: int. 一般dim设为-1(表示输出Tensor的和为1.的dim为哪个)
     :return: shape = x.shape"""
 
     return torch.exp(x) / torch.sum(torch.exp(x), dim, True)
-
-
-def _softplus(x, beta=1, threshold=20):
-    """(F.softplus())
-
-    :param x: shape[N/..., num_classes]
-    :param beta: (1/beta) * log(1 + e^(beta * x))
-    :param .threshold: 超过该阀值，按线性处理. 未实现"""
-    return 1 / beta * torch.log(1 + torch.exp(beta * x))
 
 
 # --------------------------------------------------- loss
@@ -100,17 +90,6 @@ def _binary_cross_entropy(y_pred, y_true, with_logits=False):
     return torch.mean(y_true * -torch.log(y_pred) + (1 - y_true) * -torch.log(1 - y_pred))
 
 
-def _nll_loss(y_pred, y_true):
-    """The negative log likelihood loss(F.nll_loss())
-
-    :param y_pred: Tensor[N/..., num_classes] Float
-    :param y_true: Tensor[N/...] Long
-    :return: Tensor[标量]
-    """
-    y_true = to_categorical(y_true, y_pred.shape[-1])
-    return torch.mean(torch.sum(-y_true * y_pred, dim=-1))
-
-
 def _mse_loss(y_pred, y_true):
     """均方误差损失(F.mse_loss() 只实现了部分功能)
 
@@ -141,10 +120,10 @@ def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Te
             _dim = (0, 2, 3)
         else:
             raise ValueError("x dim error")
-        mean = eval_mean = torch.mean(x, _dim)  # 估计
+        mean = torch.mean(x, _dim)  # 总体 = 估计
         eval_var = torch.var(x, _dim, unbiased=True)  # 无偏估计, x作为样本
         var = torch.var(x, _dim, unbiased=False)  # 用于标准化, x作为总体
-        running_mean[:] = (1 - momentum) * running_mean + momentum * eval_mean
+        running_mean[:] = (1 - momentum) * running_mean + momentum * mean
         running_var[:] = (1 - momentum) * running_var + momentum * eval_var  # 无偏估计
     else:
         mean = running_mean
@@ -155,21 +134,10 @@ def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Te
         mean, var = mean[:, None, None], var[:, None, None]
         weight, bias = weight[:, None, None], bias[:, None, None]
     return (x - mean) * torch.rsqrt(var + eps) * weight + bias
-    # or:
+    # or: 以下为torch中源码实现方式
     # scale = weight * torch.rsqrt(var + eps)
     # bias = bias - mean * scale
     # return x * scale + bias
-
-
-def _group_norm(x, num_groups, weight, bias, eps=1e-5):
-    """不对batch_size做norm. 只对通道的组做norm(torch.group_norm())"""
-    assert x.shape[1] % num_groups == 0
-    x = torch.reshape(x, (x.shape[0], num_groups, x.shape[1] // num_groups, *x.shape[-2:]))
-    mean = torch.mean(x, dim=(2, 3, 4), keepdim=True)  # shape(N, num_groups)
-    var = torch.var(x, dim=(2, 3, 4), unbiased=False, keepdim=True)
-    x = (x - mean) * torch.rsqrt(var + eps)
-    x = torch.reshape(x, (x.shape[0], -1, *x.shape[-2:]))
-    return x * weight[:, None, None] + bias[:, None, None]
 
 
 def _dropout(x, drop_p, training):
@@ -384,155 +352,61 @@ def __conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
 def _nearest_interpolate(x: Tensor, size: Tuple[int, int] = None, scale_factor: float = None) -> Tensor:
     """最近邻插值(F.interpolate(mode="nearest")). 与torch实现相同，与cv实现是否相同未知 - 已重写简化
 
-    :param x: shape = (N, C, Hin, Win)
-    :param size:
+    :param x: shape = (N, C, Hin, Win) - 像素点当作点来看待(与bilinear不同)
+    :param size: Tuple[Hout, Wout]
     :param scale_factor: size和scale_factor必须且只能提供其中的一个参数
-    :return: shape = (N, C, *size)
+    :return: shape = (N, C, Hout, Wout)
     """
     in_size = x.shape[-2:]
     if scale_factor:
         size = int(in_size[0] * scale_factor), int(in_size[1] * scale_factor)  # out_size
-    split_y = torch.arange(0, in_size[0], in_size[0] / size[0], device=x.device).long()
-    split_x = torch.arange(0, in_size[1], in_size[1] / size[1], device=x.device).long()
-    src_y, src_x = torch.meshgrid(split_y, split_x)  # 盖在src上的坐标点
-    output = x[:, :, src_y, src_x]
+    step_h, step_w = in_size[0] / size[0], in_size[1] / size[1]  # 步长
+    axis_h = torch.arange(0, in_size[0], step_h, device=x.device).long()  # h坐标轴
+    axis_w = torch.arange(0, in_size[1], step_w, device=x.device).long()  # w坐标轴
+    grid_h, grid_w = torch.meshgrid(axis_h, axis_w)  # 生成网格
+    output = x[:, :, grid_h, grid_w]
 
     return output
 
 
-def _bilinear_interpolate(x, output_size, align_corners=False):
-    """双线性插值(F.interpolate(mode="bilinear")).
-    notice: torch未实现3D. 此函数实现了.
+def _bilinear_interpolate(x: Tensor, size: Tuple[int, int] = None, scale_factor: float = None,
+                          align_corners: bool = False) -> Tensor:
+    """双线性插值(F.interpolate(mode="bilinear")) - 已重写简化
 
-    :param x: shape = (N, C, Hin, Win) or (C, Hin, Win)
-    :return: shape = (N, C, *output_size)
+    :param x: shape = (N, C, Hin, Win)
+    :param size: Tuple[Hout, Wout]
+    :param scale_factor: size和scale_factor必须且只能提供其中的一个参数
+    :param align_corners: 像素点当作像素方块来看待(与nearest不同)
+        False: 输入和输出张量按其角像素的角点对齐。超过边界的值，插值使用边缘值填充
+        True(保留角像素的值): 输入和输出张量按其角像素的中心点对齐
+    :return: shape = (N, C, Hout, Wout)
     """
-    if isinstance(output_size, int):
-        output_size = (output_size, output_size)
-    assert x.dim() in (3, 4)
 
     in_size = x.shape[-2:]
-    # 1. output的坐标点 => 映射src坐标点
-    if align_corners:  # 原图/输出图 像素点认为是点(点即使边缘)  (对齐_中心点 与 坐标点)
-        split_y = torch.linspace(0, in_size[0] - 1, output_size[0], device=x.device)
-        split_x = torch.linspace(0, in_size[1] - 1, output_size[1], device=x.device)
-    else:  # 原图/输出图 像素点认为是正方形(默认). 点外还有一圈.
-        h, w = in_size[0] / output_size[0], in_size[1] / output_size[1]
-        split_y = torch.linspace(-0.5 + h / 2, in_size[0] - 0.5 - h / 2, output_size[0], device=x.device)
-        split_x = torch.linspace(-0.5 + w / 2, in_size[1] - 0.5 - w / 2, output_size[1], device=x.device)
-    src_y, src_x = torch.meshgrid(split_y, split_x)  # 盖在src上的坐标点
-    if not align_corners:
-        # 防止 `in_size[0] - 0.5 - h / 2 > in_size[0] - 1` and `-0.5 + h / 2 < 0`
-        src_y.clamp_(0, in_size[0] - 1)
-        src_x.clamp_(0, in_size[1] - 1)
-
-    # 2. 双线性插值算法进行转换(越近 权重越大)
-    i_f, j_f = src_y.long(), src_x.long()  # floor  y, x
-    i_c, j_c = src_y.ceil().long(), src_x.ceil().long()  # ceil  y, x
-    u, v = src_y - i_f.float(), src_x - j_f.float()
-    output = (1 - u) * (1 - v) * x[..., i_f, j_f] + \
-             (1 - u) * v * x[..., i_f, j_c] + \
-             u * (1 - v) * x[..., i_c, j_f] + \
-             u * v * x[..., i_c, j_c]
+    if scale_factor:
+        size = int(in_size[0] * scale_factor), int(in_size[1] * scale_factor)  # out_size
+    step_h, step_w = in_size[0] / size[0], in_size[1] / size[1]
+    if align_corners:  # 角像素的中心点对齐(保留角像素的值)
+        axis_h = torch.linspace(0, in_size[0] - 1, size[0], device=x.device)  # h坐标轴
+        axis_w = torch.linspace(0, in_size[1] - 1, size[1], device=x.device)  # w坐标轴
+    else:  # 角像素的角点对齐
+        axis_h = torch.linspace(-0.5 + step_h / 2, - 0.5 + in_size[0] - step_h / 2, size[0], device=x.device)
+        axis_w = torch.linspace(-0.5 + step_w / 2, - 0.5 + in_size[1] - step_w / 2, size[1], device=x.device)
+    grid_h, grid_w = torch.meshgrid(axis_h, axis_w)  # 生成网格
+    # if not align_corners:  # 超过边界的值，插值使用边缘值填充
+    # 理论上align_corners == True时不需要截断，但是linespace会有误差，导致有时候过ceil()后索引时会越界，所以都加上
+    grid_h.clamp_(0, in_size[0] - 1)
+    grid_w.clamp_(0, in_size[1] - 1)
+    # 以下6个张量都是2D的, shape(Hout * Wout, Hout * Wout)
+    grid_h_f, grid_w_f = grid_h.long(), grid_w.long()  # floor
+    grid_h_c, grid_w_c = grid_h.ceil().long(), grid_w.ceil().long()  # ceil
+    offset_h, offset_w = grid_h - grid_h_f.float(), grid_w - grid_w_f.float()  # 与floor的偏离量
+    # 左上角, 右上角, 左下角, 右下角
+    output = (1 - offset_h) * (1 - offset_w) * x[:, :, grid_h_f, grid_w_f] + \
+             (1 - offset_h) * offset_w * x[:, :, grid_h_f, grid_w_c] + \
+             offset_h * (1 - offset_w) * x[:, :, grid_h_c, grid_w_f] + \
+             offset_h * offset_w * x[:, :, grid_h_c, grid_w_c]
     return output
-
-
-def _roi_pool(x, boxes, output_size):
-    """roi池化(torchvision.ops.roi_pool())
-    notice:
-        当boxes超边界时，与roi_pool()有差别(会在超出部分padding 0.). 此函数会报错.
-        roi_pool()不支持output_size为int型. 此函数支持
-
-    :param x: Tensor[N, C, H, W]. N: 图片数/批次
-    :param boxes: List[Tensor[NUMi, 4]]. (left, top, right, bottom).
-        NUMi: 一张图片中的预选框数量
-    :param output_size: Union[int, tuple(H, W)]
-    :return: Tensor[NUM, C, *output_size]"""
-
-    if isinstance(output_size, int):
-        output_size = output_size, output_size
-
-    output = []
-    for i in range(len(boxes)):  # 遍历每一张图片
-        for j in range(boxes[i].shape[0]):  # 遍历图片中每一个box
-            left, top, right, bottom = boxes[i][j]
-            assert 0 <= top and bottom <= x.shape[-2] - 1 and 0 <= left and right <= x.shape[-1] - 1
-            pos_h = slice(top.int(), bottom.ceil().int() + 1)
-            pos_w = slice(left.int(), right.ceil().int() + 1)
-            input_ = x[i, :, pos_h, pos_w]  # 超出部分被截
-            # ROI池化
-            output.append(F.adaptive_max_pool2d(input_, output_size))
-    return torch.stack(output, dim=0)
-
-
-def _roi_align(x, boxes, output_size, sampling_ratio=-1):
-    """(torchvision.ops.roi_align()) 可能有误差
-    notice:
-        当boxes超边界时，与roi_align()有差别(会在超出部分padding 0.). 此函数会报错.
-        roi_align()不支持output_size为int型. 此函数支持.
-
-    :param x: Tensor[N, C, H, W]. N: 图片数/批次
-    :param boxes: List[Tensor[NUMi, 4]]. (left, top, right, bottom).
-        NUMi: 一张图片中的预选框数量
-    :param output_size: Union[int, tuple(H, W)]
-    :param sampling_ratio: Union[int, tuple(int, int)]
-        大bin分成 sampling_ratio * sampling_ratio 个小bin
-        默认(<=0): math.ceil(box_h / output_size[0]), math.ceil(box_w / output_size[1]). 平均每个小bin约等于1(但<=1)
-    :return: Tensor[NUM, C, *output_size]"""
-
-    def __roi_align(x, box, output_size, sampling_ratio):
-        """单预选框的roi_align操作
-
-        :param x: Tensor[C, H, W]
-        :param box: Tensor[4,]. float
-        :param output_size: tuple[int]
-        :param sampling_ratio: Union[int, tuple(int, int)]
-        :return: Tensor[C, output_size[0], output_size[1]]
-        """
-
-        left, top, right, bottom = box
-        assert 0 <= top and bottom <= x.shape[-2] - 1 and 0 <= left and right <= x.shape[-1] - 1
-        box_h, box_w = (bottom - top), (right - left)  # in_size = box + 1
-        if isinstance(sampling_ratio, int):
-            if sampling_ratio <= 0:
-                sampling_ratio = math.ceil(box_h / output_size[0]), math.ceil(box_w / output_size[1])
-            else:
-                sampling_ratio = sampling_ratio, sampling_ratio
-        #  一个小bin的 h, w
-        bin_h, bin_w = box_h / output_size[0] / sampling_ratio[0], box_w / output_size[1] / sampling_ratio[1]
-
-        # 1. output的坐标点 => 映射src坐标点
-        # bilinear, align_corners=True (像素点认为是点)
-        split_y = torch.linspace(top + bin_h / 2, bottom - bin_h / 2, output_size[0] * sampling_ratio[0],
-                                 device=x.device)
-        split_x = torch.linspace(left + bin_w / 2, right - bin_w / 2, output_size[1] * sampling_ratio[1],
-                                 device=x.device)
-        src_y, src_x = torch.meshgrid(split_y, split_x)  # 盖在src上的坐标点
-
-        # 2. 双线性插值算法进行转换(越近 权重越大)
-        i_f, j_f = src_y.long(), src_x.long()  # floor  y, x
-        i_c, j_c = src_y.ceil().long(), src_x.ceil().long()  # ceil  y, x
-        u, v = src_y - i_f.float(), src_x - j_f.float()
-        # 用了: 而不是..., 与_bilinear_interpolate()有一定区别
-        out = (1 - u) * (1 - v) * x[:, i_f, j_f] + \
-              (1 - u) * v * x[:, i_f, j_c] + \
-              u * (1 - v) * x[:, i_c, j_f] + \
-              u * v * x[:, i_c, j_c]
-        # 3. 平均池化
-        out = F.avg_pool2d(out, sampling_ratio)
-        return out
-
-    if isinstance(output_size, int):
-        output_size = output_size, output_size
-
-    output = []
-    for i in range(len(boxes)):  # 遍历每一张图片
-        for j in range(boxes[i].shape[0]):  # 遍历图片中每一个box
-            boxes = boxes[i][j]
-            input_ = x[i]  # 超出部分被截
-            # 对预选框进行roi_align操作
-            output.append(__roi_align(input_, boxes, output_size, sampling_ratio))
-    return torch.stack(output)
 
 
 def _adaptive_avg_pool2d(x, output_size):
