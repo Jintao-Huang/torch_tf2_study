@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 import math
 from torch import Tensor
+from typing import Tuple
 
 
 # --------------------------------------------------- activation
@@ -121,15 +122,15 @@ def _mse_loss(y_pred, y_true):
 
 
 # --------------------------------------------------- layers
-def _batch_norm(x: Tensor, weight: Tensor, bias: Tensor, running_mean: Tensor, running_var: Tensor,
+def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Tensor, bias: Tensor,
                 training: bool = False, momentum: float = 0.1, eps: float = 1e-5) -> Tensor:
     """BN(F.batch_norm()) - 已重写简化
 
     :param x: shape = (N, In) or (N, Cin, H, W)
-    :param weight: shape = (In,) 或 (Cin,) 下同
-    :param bias: shape = (In,)
-    :param running_mean: shape = (In,)
+    :param running_mean: shape = (In,) 或 (Cin,) 下同
     :param running_var: shape = (In,)
+    :param weight: shape = (In,)
+    :param bias: shape = (In,)
     :param momentum: (同torch)动量实际为 1 - momentum
     :return: shape = x.shape"""
 
@@ -380,35 +381,27 @@ def __conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     return output
 
 
-def _nearest_interpolate(x, output_size):
-    """最近邻插值(F.interpolate(mode="nearest")).
-    notice: 与torch实现不同. (但是上采样1倍, 下采样1/2倍, 结果一致)
+def _nearest_interpolate(x: Tensor, size: Tuple[int, int] = None, scale_factor: float = None) -> Tensor:
+    """最近邻插值(F.interpolate(mode="nearest")). 与torch实现相同，与cv实现是否相同未知 - 已重写简化
 
-    :param x: shape = (N, C, Hin, Win) or (C, Hin, Win)
-    :return: shape = (N, C, *output_size)
+    :param x: shape = (N, C, Hin, Win)
+    :param size:
+    :param scale_factor: size和scale_factor必须且只能提供其中的一个参数
+    :return: shape = (N, C, *size)
     """
-    if isinstance(output_size, int):
-        output_size = (output_size, output_size)
-    assert x.dim() in (3, 4)
-
     in_size = x.shape[-2:]
-    # 1. output的坐标点 => 映射src坐标点
-    # ----------align_corners=False  方
-    h, w = in_size[0] / output_size[0], in_size[1] / output_size[1]
-    split_y = torch.linspace(-0.5 + h / 2, in_size[0] - 0.5 - h / 2, output_size[0], device=x.device)
-    split_x = torch.linspace(-0.5 + w / 2, in_size[1] - 0.5 - w / 2, output_size[1], device=x.device)
-    # ----------align_corners=True (仅仅作为区分)
-    # split_y = torch.linspace(0, in_size[0] - 1, output_size[0])
-    # split_x = torch.linspace(0, in_size[1] - 1, output_size[1])
+    if scale_factor:
+        size = int(in_size[0] * scale_factor), int(in_size[1] * scale_factor)  # out_size
+    split_y = torch.arange(0, in_size[0], in_size[0] / size[0], device=x.device).long()
+    split_x = torch.arange(0, in_size[1], in_size[1] / size[1], device=x.device).long()
     src_y, src_x = torch.meshgrid(split_y, split_x)  # 盖在src上的坐标点
-    # 2. 最近邻算法进行转换
-    output = x[..., src_y.round().long(), src_x.round().long()]
+    output = x[:, :, src_y, src_x]
 
     return output
 
 
 def _bilinear_interpolate(x, output_size, align_corners=False):
-    """双线性插值(F.interpolate(mode="bilinear")). 经测试完全匹配
+    """双线性插值(F.interpolate(mode="bilinear")).
     notice: torch未实现3D. 此函数实现了.
 
     :param x: shape = (N, C, Hin, Win) or (C, Hin, Win)
@@ -420,10 +413,10 @@ def _bilinear_interpolate(x, output_size, align_corners=False):
 
     in_size = x.shape[-2:]
     # 1. output的坐标点 => 映射src坐标点
-    if align_corners:  # 原图/输出图 像素点认为是点(点即使边缘)
+    if align_corners:  # 原图/输出图 像素点认为是点(点即使边缘)  (对齐_中心点 与 坐标点)
         split_y = torch.linspace(0, in_size[0] - 1, output_size[0], device=x.device)
         split_x = torch.linspace(0, in_size[1] - 1, output_size[1], device=x.device)
-    else:  # 原图/输出图 像素点认为是正方形(默认). 点外还有一圈. 记忆: F 方 False
+    else:  # 原图/输出图 像素点认为是正方形(默认). 点外还有一圈.
         h, w = in_size[0] / output_size[0], in_size[1] / output_size[1]
         split_y = torch.linspace(-0.5 + h / 2, in_size[0] - 0.5 - h / 2, output_size[0], device=x.device)
         split_x = torch.linspace(-0.5 + w / 2, in_size[1] - 0.5 - w / 2, output_size[1], device=x.device)
