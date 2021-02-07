@@ -5,13 +5,13 @@
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from typing import Tuple
+from typing import Tuple, List
 
 
 # --------------------------------------------------- activation
 
 def _relu(x: Tensor) -> Tensor:
-    """(F.relu()) - 已重写简化
+    """(F.relu(inplace=False)) - 已重写简化
 
     :param x: shape = (N, In) or (N, Cin, H, W)
     :return: shape = x.shape"""
@@ -21,7 +21,7 @@ def _relu(x: Tensor) -> Tensor:
 
 
 def _leaky_relu(x: Tensor, negative_slope: float = 0.01) -> Tensor:
-    """(F.leaky_relu()) - 已重写简化"""
+    """(F.leaky_relu(inplace=False)) - 已重写简化"""
     return torch.where(x > 0, x, negative_slope * x)
 
 
@@ -107,10 +107,12 @@ def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Te
 
     :param x: shape = (N, In) or (N, Cin, H, W)
     :param running_mean: shape = (In,) 或 (Cin,) 下同
-    :param running_var: shape = (In,)
-    :param weight: shape = (In,)
-    :param bias: shape = (In,)
-    :param momentum: (同torch)动量实际为 1 - momentum
+    :param running_var:
+    :param weight:
+    :param bias:
+    :param training:
+    :param momentum: 动量实际为 1 - momentum. (同torch)
+    :param eps:
     :return: shape = x.shape"""
 
     if training:
@@ -120,10 +122,10 @@ def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Te
             _dim = (0, 2, 3)
         else:
             raise ValueError("x dim error")
-        mean = torch.mean(x, _dim)  # 总体 = 估计
+        mean = eval_mean = torch.mean(x, _dim)  # 总体 = 估计. shape = (In,) or (Cin,)
         eval_var = torch.var(x, _dim, unbiased=True)  # 无偏估计, x作为样本
         var = torch.var(x, _dim, unbiased=False)  # 用于标准化, x作为总体
-        running_mean[:] = (1 - momentum) * running_mean + momentum * mean
+        running_mean[:] = (1 - momentum) * running_mean + momentum * eval_mean
         running_var[:] = (1 - momentum) * running_var + momentum * eval_var  # 无偏估计
     else:
         mean = running_mean
@@ -287,9 +289,50 @@ def _conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, pad
                            slice(w_start, (w_start + kernel_size[1]))
 
             output[:, :, i, j] = torch.sum(
-                # N, K_Cout, K_Cin, KH, KW
+                # N, Cout, Cin, KH, KW
                 x[:, None, :, h_pos, w_pos] * weight[None, :, :, :, :], dim=(-3, -2, -1)) \
                                  + (bias if bias is not None else 0)
+    return output
+
+
+def __conv2d(x: Tensor, weight: Tensor, bias: Tensor = None,
+             stride: int = 1, padding: int = 0,
+             dilation: int = 1, groups: int = 1) -> Tensor:
+    """2d卷积(F.conv2d()) - 复杂版
+
+    :param x: shape = (N, Cin, Hin, Win)
+    :param weight: shape = (groups * G_Cout, G_Cin, KH, KW).
+    :param bias: shape = (Cout,)
+    :param stride: int
+    :param padding: int
+    :param dilation: int. 膨胀卷积 / 空洞卷积
+    :param groups: int. 分组卷积
+    :return: shape = (N, Cout, Hout, Wout).
+    """
+
+    if padding:
+        x = _zero_padding2d(x, padding)
+    kernel_size = dilation * (weight.shape[-2] - 1) + 1, dilation * (weight.shape[-1] - 1) + 1
+
+    # Out(H, W) = (In(H, W) + 2 * padding − kernel_size) // stride + 1.
+    output_h, output_w = (x.shape[2] - kernel_size[0]) // stride + 1, \
+                         (x.shape[3] - kernel_size[1]) // stride + 1
+    output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
+                         dtype=x.dtype, device=x.device)
+    for g in range(groups):
+        g_cout, g_cin = weight.shape[0] // groups, weight.shape[1]
+        cin_pos = slice(g_cin * g, g_cin * (g + 1))
+        cout_pos = slice(g_cout * g, g_cout * (g + 1))
+        for i in range(output.shape[2]):  # Hout
+            for j in range(output.shape[3]):  # # Wout
+                h_start, w_start = i * stride, j * stride
+                h_pos, w_pos = slice(h_start, (h_start + kernel_size[0]), dilation), \
+                               slice(w_start, (w_start + kernel_size[1]), dilation)
+                output[:, cout_pos, i, j] = torch.sum(
+                    # N, G_Cout, G_Cin, KH, KW
+                    x[:, None, cin_pos, h_pos, w_pos] * weight[None, cout_pos, :, :, :], dim=(-3, -2, -1)) \
+                                            + (bias[cout_pos] if bias is not None else 0)
+
     return output
 
 
@@ -402,27 +445,124 @@ def _adaptive_max_pool2d(x, output_size):
     return output
 
 
-def _rnn_cell(x0, h0, weight, bias=True):
-    """h1/y1 = tanh(x0 @ W_ih^T + b_ih + h0 @ W_hh^T + b_hh)  (已测试)
+def _rnn_tanh_cell(x: Tensor, hx: Tensor, w_ih: Tensor, w_hh: Tensor,
+                   b_ih: Tensor = None, b_hh: Tensor = None) -> Tensor:
+    """torch.rnn_tanh_cell() - 已重写简化
 
-    :param x0: shape[N, Cin].
-    :param h0: shape[N, Ch]
-    :param weight: List(weight_ih: shape[Ch, Cin], weight_hh: shape[Ch, Ch],
-            bias_ih: shape[Ch], bias_hh: shape[Ch])
-            len(4 or 2)
-    :param bias: bool. 是否有bias
-    :return: y1/h1: shape[N, Ch]
+    :param x: shape = (N, Cin)
+    :param hx: shape = (N, Ch)
+    :param w_ih: shape = (Ch, Cin)
+    :param w_hh: shape = (Ch, Ch)
+    :param b_ih: shape = (Ch,)
+    :param b_hh: shape = (Ch,)
+    :return: shape = (N, Ch)"""
+    # out = tanh(x @ w_ih^T + b_ih + hx @ w_hh^T + b_hh)
+
+    batch_size = x.shape[0]
+    if hx is None:
+        hx = torch.zeros(batch_size, w_ih.shape[0])  # weight[0].shape[0]: Ch
+    return torch.tanh(x @ w_ih.t() + (b_ih if b_ih is not None else 0.) +
+                      hx @ w_hh.t() + (b_hh if b_hh is not None else 0.))
+
+
+def _rnn_tanh(x: Tensor, hx: Tensor, params: List[Tensor], has_biases: bool = True, num_layers: int = 1) \
+        -> Tuple[Tensor, Tensor]:
+    """(复现: torch.rnn_tanh()) - 已简化
+    规定: dropout: float = 0., train: bool = ..., bidirectional: bool = False, batch_first: bool = False
+    使用e.g.: _rnn_tanh(x, hx, [w_ih, w_hh, b_ih, b_hh, w_ih2, w_hh2, b_ih2, b_hh2], True, 2)
+
+    :param x: shape = (T, N, Cin)
+    :param hx: shape = (L, N, Ch)
+    :param params: [w0_ih, w0_hh, b0_ih, b0_hh, w1_ih, ...] shape = [(Ch, Cin), (Ch, Ch), (Ch,), (Ch), (Ch, Ch), ...]
+    :param has_biases: 若为False: 则len(params)应为2 * L. True: len(params)应为4 * L
+    :param num_layers: L
+    :return: (y: shape(T, N, Ch), hy: shape(L, N, Ch))
     """
-    batch_size = x0.shape[0]
-    if h0 is None:
-        h0 = torch.zeros(batch_size, weight[0].shape[0])  # weight[0].shape[0]: Ch
 
-    assert x0.shape[0] == h0.shape[0] and isinstance(bias, bool)  # N == N
-    # weight  不经过验证
+    hy = []  # 存储每层最后的hy
+    for i in range(num_layers):
+        y = []  # 一层的输出
+        _hx = hx[i]  # 保存_rnn_tanh_cell()的hx输入
+        if has_biases:
+            w_ih, w_hh, b_ih, b_hh = params[:4]
+            params = params[4:]
+        else:
+            w_ih, w_hh, b_ih, b_hh = (*params[:2], None, None)
+            params = params[2:]
+        for j in range(x.shape[0]):
+            y.append(_rnn_tanh_cell(x[j], _hx, w_ih, w_hh, b_ih, b_hh))
+            _hx = y[-1]
+        hy.append(_hx)
+        x = y = torch.stack(y)
+    hy = torch.stack(hy)
+    return y, hy
 
-    y1 = torch.tanh(x0 @ weight[0].t() + (weight[2] if bias is not None else 0) +
-                    h0 @ weight[1].t() + (weight[3] if bias is not None else 0))
-    return y1
+
+def __rnn_tanh(x: Tensor, hx: Tensor, params: List[Tensor], has_biases: bool = True, num_layers: int = 1,
+               dropout: float = 0., train: bool = True,
+               bidirectional: bool = False, batch_first: bool = False) -> Tuple[Tensor, Tensor]:
+    """(复现: torch.rnn_tanh()) - 复杂版
+    使用e.g.: y1, hy1 = __rnn_tanh(x, h_bi, [w_ih, w_hh, b_ih, b_hh,
+                               w_ih_r, w_hh_r, b_ih_r, b_hh_r,
+                               w_ih1, w_hh1, b_ih1, b_hh1,
+                               w_ih1_r, w_hh1_r, b_ih1_r, b_hh1_r
+                               ], True, 2, 0.2, True, True, True)
+
+    :param x: shape = (T, N, Cin)
+    :param hx: shape = (L * Bi, N, Ch)
+    :param params: [w0_ih, w0_hh, b0_ih, b0_hh, w1_ih, ...] shape = [(Ch, Cin), (Ch, Ch), (Ch,), (Ch), (Ch, Ch), ...]
+        or [w0_ih, ..., w0_ih_r, ..., w1_ih,...] shape = [(Ch, Cin), ..., (Ch, Cin), ...(Ch, Ch), ...]
+    :param has_biases: 若为False: 则len(params)应为L * Bi * 2. True: len(params)应为L * Bi * 4
+    :param num_layers: L
+    :param dropout: 除最后一层
+    :param train:
+    :param bidirectional: 若False: Bi = 1; True: Bi = 2.
+    :param batch_first: x.shape = (N, T, Cin). 返回的y.shape = (N, T, Bi * Ch)
+    :return: (y: shape(T, N, Bi * Ch), hy: shape(L * Bi, N, Ch))
+    """
+    if batch_first:
+        x = torch.transpose(x, 0, 1)
+    hy, hy_r = [], []  # 存储每层最后的hy, hy_r
+    for i in range(num_layers):
+        y, y_r = [], []  # 一层的输出
+        # 保存_rnn_tanh_cell()的hx输入
+        if bidirectional:
+            _hx, _hx_r = hx[2 * i], hx[2 * i + 1]
+            if has_biases:
+                w_ih, w_hh, b_ih, b_hh, w_ih_r, w_hh_r, b_ih_r, b_hh_r = params[:8]
+                params = params[8:]
+            else:
+                w_ih, w_hh, w_ih_r, w_hh_r = params[:4]
+                b_ih, b_hh, b_ih_r, b_hh_r = None, None, None, None
+                params = params[4:]
+            for j in range(x.shape[0]):
+                y.append(_rnn_tanh_cell(x[j], _hx, w_ih, w_hh, b_ih, b_hh))
+                y_r.append(_rnn_tanh_cell(x[x.shape[0] - j - 1], _hx_r, w_ih_r, w_hh_r, b_ih_r, b_hh_r))
+                _hx = y[-1]
+                _hx_r = y_r[-1]
+            hy += [_hx, _hx_r]
+            y_r.reverse()
+            x = y = torch.cat([torch.stack(y), torch.stack(y_r)], dim=-1)
+        else:
+            _hx = hx[i]
+            if has_biases:
+                w_ih, w_hh, b_ih, b_hh = params[:4]
+                params = params[4:]
+            else:
+                w_ih, w_hh = params[:2]
+                b_ih, b_hh = None, None
+                params = params[2:]
+            for j in range(x.shape[0]):
+                y.append(_rnn_tanh_cell(x[j], _hx, w_ih, w_hh, b_ih, b_hh))
+                _hx = y[-1]
+            hy.append(_hx)
+            x = y = torch.stack(y)
+        if dropout and i + 1 != num_layers:
+            x = F.dropout(x, dropout, train)
+    hy = torch.stack(hy)
+    if batch_first:
+        y = torch.transpose(y, 0, 1)
+    return y, hy
 
 
 def _lstm_cell(x0, h0, c0, weight, bias=True):
@@ -490,7 +630,7 @@ def _gru_cell(x0, h0, weight, bias=True):
 
     # r = σ(x0 @ Wir^T + bir + h0 @ Whr^T + bhr)  
     # z = σ(x0 @ Wiz^T + biz + h0 @ Whz^T + bhz)  
-    # n = tanh(x0 @ Win^T + bin + r*(h @ Whn^T + bhn))  
+    # n = tanh(x0 @ Win^T + bin + r*(h0 @ Whn^T + bhn))  
     # h1/y1 = (1 − z) * n + z * h0
     r = torch.sigmoid(x0 @ weight[0][0:c_hide].t() + (weight[2][0:c_hide] if bias is not None else 0) +
                       h0 @ weight[1][0:c_hide].t() + (weight[3][0:c_hide] if bias is not None else 0))

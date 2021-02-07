@@ -21,7 +21,7 @@ class ConvBNReLU(nn.Sequential):
 
 class ConvBlock(nn.Sequential):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding, bias):
-        super().__init__(
+        super(ConvBlock, self).__init__(
             ConvBNReLU(in_channels, out_channels, kernel_size, 1, padding, bias=bias),
             ConvBNReLU(out_channels, out_channels, kernel_size, 1, padding, bias=bias),
             ConvBNReLU(out_channels, out_channels, kernel_size, stride, padding, bias=bias)
@@ -64,9 +64,10 @@ def get_acc(pred, label):
     return torch.mean((pred == label).float())
 
 
-def train(model, loss_fn, optim, train_loader, epoch, device):
+def train(model, train_loader, loss_fn, optim, lr_scheduler, epoch, device):
     for i in range(epoch):
         loss_total, acc_total, start_time = 0., 0., time.time()
+        lr_scheduler.step(i)
         for j, (data, label) in enumerate(train_loader):
             data, label = data.to(device), label.to(device)
             pred = model(data)
@@ -115,6 +116,26 @@ def test(model, test_loader, device):
                   (i + 1, len(test_loader), acc * 100, end_time - start_time))
 
 
+class LRScheduler:
+    """学习率控制器"""
+
+    def __init__(self, optim, lr_func):
+        self.optim = optim
+        self.lr_func = lr_func
+
+    def step(self, epoch):
+        lr = self.lr_func(epoch)
+        self.optim.param_groups[0]['lr'] = lr
+        return lr
+
+
+def lr_func(epoch):
+    if 0 <= epoch < 8:
+        return 0.01
+    else:
+        return 1e-3
+
+
 def main():
     epoch = 10
     save_model_name = "mnist_model.pth"  # 保存的模型名
@@ -140,11 +161,12 @@ def main():
         load_params(model, save_model_name)
     loss_fn = nn.CrossEntropyLoss()
     optim = torch.optim.SGD(model.parameters(), 1e-2, momentum=0.9, weight_decay=1e-4)
+    lr_scheduler = LRScheduler(optim, lr_func)
     # optim = torch.optim.Adam(model.parameters(), 5e-4, weight_decay=1e-4)
 
     # 3. 训练集训练
     print("---------------------- Train")
-    train(model, loss_fn, optim, train_loader, epoch, device)
+    train(model, train_loader, loss_fn, optim, lr_scheduler, epoch, device)
     # 测试集测试
     print("---------------------- Test")
     test(model, test_loader, device)
