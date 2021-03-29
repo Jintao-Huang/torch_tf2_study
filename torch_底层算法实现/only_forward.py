@@ -277,7 +277,7 @@ def _conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, pad
     if padding:
         x = _zero_padding2d(x, padding)
     kernel_size = weight.shape[-2:]
-    # Out(H, W) = (In(H, W) + 2 * padding − kernel_size) // stride + 1
+    # Out = (In + 2*P − K) // S + 1
     output_h, output_w = (x.shape[2] - kernel_size[0]) // stride + 1, \
                          (x.shape[3] - kernel_size[1]) // stride + 1
     output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
@@ -293,6 +293,37 @@ def _conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, pad
                 x[:, None, :, h_pos, w_pos] * weight[None, :, :, :, :], dim=(-3, -2, -1)) \
                                  + (bias if bias is not None else 0)
     return output
+
+
+def _conv_transpose2d(x: Tensor, weight: Tensor, bias: Tensor = None,
+                      stride: int = 1, padding: int = 0) -> Tensor:
+    """2d转置卷积(F.conv_transpose2d()) - 已重写简化
+    (在torch底层实现时不采用这种方法，此方法便于学习、效率较低)
+
+    :param x: shape = (N, Cin, Hin, Win)
+    :param weight: shape = (Cin, Cout, KH, KW)
+    :param bias: shape = (Cout,)
+    :param stride: int
+    :param padding: int
+    :return: shape = (N, Cout, Hout, Wout)
+    """
+    kernel_size = weight.shape[-2:]
+    # O = S*(In-1) - 2*P + K
+    output_h, output_w = stride * (x.shape[2] - 1) + kernel_size[0], \
+                         stride * (x.shape[3] - 1) + kernel_size[1]
+    output = torch.empty((x.shape[0], weight.shape[1], output_h, output_w),
+                         dtype=x.dtype, device=x.device)
+    for i in range(x.shape[2]):  # Hin
+        for j in range(x.shape[3]):  # # Win
+            h_start, w_start = i * stride, j * stride
+            h_pos, w_pos = slice(h_start, (h_start + kernel_size[0])), \
+                           slice(w_start, (w_start + kernel_size[1]))
+            # N, Cin, Cout, KH, KW
+            output[:, :, h_pos, w_pos] += torch.sum(
+                x[:, :, None, i:i + 1, j:j + 1] * weight[None, :, :, :, :], dim=1)
+    if bias is not None:
+        output += bias[:, None, None]
+    return output if padding == 0 else output[:, :, padding:-padding, padding:-padding]
 
 
 def __conv2d(x: Tensor, weight: Tensor, bias: Tensor = None,
@@ -314,7 +345,7 @@ def __conv2d(x: Tensor, weight: Tensor, bias: Tensor = None,
         x = _zero_padding2d(x, padding)
     kernel_size = dilation * (weight.shape[-2] - 1) + 1, dilation * (weight.shape[-1] - 1) + 1
 
-    # Out(H, W) = (In(H, W) + 2 * padding − kernel_size) // stride + 1.
+    # O = (I + 2*P - (D*(K-1)+1)) // S + 1
     output_h, output_w = (x.shape[2] - kernel_size[0]) // stride + 1, \
                          (x.shape[3] - kernel_size[1]) // stride + 1
     output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
@@ -456,7 +487,7 @@ def _rnn_tanh_cell(x: Tensor, hx: Tensor, w_ih: Tensor, w_hh: Tensor,
     :param b_ih: shape = (Ch,)
     :param b_hh: shape = (Ch,)
     :return: shape = (N, Ch)"""
-    # out = tanh(x @ w_ih^T + b_ih + hx @ w_hh^T + b_hh)
+    # y_i / hx_i+1 = tanh (x_i @ w_ih^T + b_ih + hx_i @ w_hh^T + b_hh)
 
     batch_size = x.shape[0]
     if hx is None:
@@ -577,12 +608,12 @@ def _lstm_cell(x0, h0, c0, weight, bias=True):
     :param bias: bool. 是否有bias
     :return: tuple(y1/h1: shape[N, Ch], c1: Tensor[N, Ch])
     """
-    # i = σ(x0 @ Wii^T + bii + h0 @ Whi^T + bhi)
-    # f = σ(x0 @ Wif^T + bif + h0 @ Whf^T + bhf)
-    # g = tanh(x0 @ Wig^T + big + h0 @ Whg^T + bhg)
-    # o = σ(x0 @ Wio^T + bio + h0 @ Who^T + bho)
-    # c1 = f * c0 + i * g   # Hadamard乘积(点乘)
-    # h1 = o * tanh(c1)
+    # i = sigmoid (x_i @ Wii^T + bii + h_i @ Whi^T + bhi)
+    # f = sigmoid (x_i @ Wif^T + bif + h_i @ Whf^T + bhf)
+    # g = tanh (x_i @ Wig^T + big + h_i @ Whg^T + bhg)
+    # o = sigmoid (x_i @ Wio^T + bio + h_i @ Who^T + bho)
+    # c_i+1 = f * c_i + i * g   # Hadamard乘积(点乘)
+    # y_i / h_i+1 = o * tanh (c_i+1)
     batch_size = x0.shape[0]
     c_hide = weight[0].shape[0] // 4  # Ch
     if h0 is None:
@@ -628,10 +659,10 @@ def _gru_cell(x0, h0, weight, bias=True):
     assert x0.shape[0] == h0.shape[0] and isinstance(bias, bool)  # N == N == N
     # weight  不经过验证
 
-    # r = σ(x0 @ Wir^T + bir + h0 @ Whr^T + bhr)  
-    # z = σ(x0 @ Wiz^T + biz + h0 @ Whz^T + bhz)  
-    # n = tanh(x0 @ Win^T + bin + r*(h0 @ Whn^T + bhn))  
-    # h1/y1 = (1 − z) * n + z * h0
+    # r = sigmoid (x_i @ Wir^T + bir + h_i @ Whr^T + bhr)  
+    # z = sigmoid (x_i @ Wiz^T + biz + h_i @ Whz^T + bhz)  
+    # n = tanh (x_i @ Win^T + bin + r*(h_i @ Whn^T + bhn))  
+    # y_i / h_i+1 = (1 − z) * n + z * h_i
     r = torch.sigmoid(x0 @ weight[0][0:c_hide].t() + (weight[2][0:c_hide] if bias is not None else 0) +
                       h0 @ weight[1][0:c_hide].t() + (weight[3][0:c_hide] if bias is not None else 0))
     z = torch.sigmoid(
