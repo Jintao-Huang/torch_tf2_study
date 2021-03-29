@@ -13,7 +13,7 @@ from typing import Tuple, List
 def _relu(x: Tensor) -> Tensor:
     """(F.relu(inplace=False)) - 已重写简化
 
-    :param x: shape = (N, In) or (N, Cin, H, W)
+    :param x: shape = (N, In) or (N, C, H, W)
     :return: shape = x.shape"""
     return torch.where(x > 0, x, torch.tensor(0.))
     # or:
@@ -105,8 +105,8 @@ def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Te
                 training: bool = False, momentum: float = 0.1, eps: float = 1e-5) -> Tensor:
     """BN(F.batch_norm()) - 已重写简化
 
-    :param x: shape = (N, In) or (N, Cin, H, W)
-    :param running_mean: shape = (In,) 或 (Cin,) 下同
+    :param x: shape = (N, In) or (N, C, H, W)
+    :param running_mean: shape = (In,) 或 (C,) 下同
     :param running_var:
     :param weight:
     :param bias:
@@ -122,7 +122,7 @@ def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Te
             _dim = (0, 2, 3)
         else:
             raise ValueError("x dim error")
-        mean = eval_mean = torch.mean(x, _dim)  # 总体 = 估计. shape = (In,) or (Cin,)
+        mean = eval_mean = torch.mean(x, _dim)  # 总体 = 估计. shape = (In,) or (C,)
         eval_var = torch.var(x, _dim, unbiased=True)  # 无偏估计, x作为样本
         var = torch.var(x, _dim, unbiased=False)  # 用于标准化, x作为总体
         running_mean[:] = (1 - momentum) * running_mean + momentum * eval_mean
@@ -131,7 +131,7 @@ def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Te
         mean = running_mean
         var = running_var
     # 2D时, mean.shape = (In,)
-    # 4D时, mean.shape = (Cin, 1, 1)
+    # 4D时, mean.shape = (C, 1, 1)
     if x.dim() == 4:  # 扩维
         mean, var = mean[:, None, None], var[:, None, None]
         weight, bias = weight[:, None, None], bias[:, None, None]
@@ -161,11 +161,11 @@ def _dropout(x, drop_p, training):
 def _zero_padding2d(x: Tensor, padding: int) -> Tensor:
     """零填充(F.pad()) - 已重写简化
 
-    :param x: shape = (N, Cin, Hin, Win)
+    :param x: shape = (N, C, Hin, Win)
     :param padding: int
-    :return: shape = (N, Cin, Hout, Wout)"""
+    :return: shape = (N, C, Hout, Wout)"""
 
-    output = torch.zeros((*x.shape[:2],  # N, Cin
+    output = torch.zeros((*x.shape[:2],  # N, C
                           x.shape[-2] + 2 * padding,  # Hout
                           x.shape[-1] + 2 * padding), dtype=x.dtype, device=x.device)  # Wout
     h_out, w_out = output.shape[-2:]
@@ -173,14 +173,15 @@ def _zero_padding2d(x: Tensor, padding: int) -> Tensor:
     return output
 
 
-def _max_pool2d(x: Tensor, kernel_size: int, stride: int = None, padding: int = 0) -> Tensor:
+def _max_pool2d(x: Tensor, kernel_size: int, stride: int = None, padding: int = 0,
+                return_indices: bool = False) -> Tensor:
     """最大池化(F.max_pool2d()) - 已重写简化.
 
-    :param x: shape = (N, Cin, Hin, Win)
+    :param x: shape = (N, C, Hin, Win)
     :param kernel_size: int
     :param stride: int = kernel_size
     :param padding: int
-    :return: shape = (N, Cin, Hout, Wout)"""
+    :return: shape = (N, C, Hout, Wout)"""
     stride = stride or kernel_size
     # Out = (In + 2*P − K) // S + 1
     # padding的0.不加入max()运算, 故如此设计
@@ -188,24 +189,51 @@ def _max_pool2d(x: Tensor, kernel_size: int, stride: int = None, padding: int = 
                          (x.shape[3] + 2 * padding - kernel_size) // stride + 1
     output = torch.empty((*x.shape[:2], output_h, output_w),
                          dtype=x.dtype, device=x.device)
+    indices = torch.empty_like(output, dtype=torch.int64)
     for i in range(output.shape[2]):  # Hout
         for j in range(output.shape[3]):  # # Wout
-            h_start, w_start = i * stride - padding, j * stride - padding
-            h_pos, w_pos = slice(h_start, (h_start + kernel_size)), \
-                           slice(w_start, (w_start + kernel_size))
-            # dim=(-2, -1)
-            output[:, :, i, j] = torch.max(torch.max(x[:, :, h_pos, w_pos], dim=-2)[0], dim=-1)[0]
+            h_start_o, w_start_o = i * stride - padding, j * stride - padding
+            h_start, w_start = max(0, h_start_o), max(0, w_start_o)
+            h_end, w_end = min(x.shape[-2], h_start_o + kernel_size), min(x.shape[-1], w_start_o + kernel_size)
+            h_pos, w_pos = slice(h_start, h_end), slice(w_start, w_end)
+            output[:, :, i, j], indices[:, :, i, j] = torch.max(x[:, :, h_pos, w_pos].flatten(2), dim=-1)
+            indices[:, :, i, j] = (h_start + indices[:, :, i, j] // (w_pos.stop - w_pos.start)) * x.shape[-2] + \
+                                  w_start + indices[:, :, i, j] % (w_pos.stop - w_pos.start)
+
+    return (output, indices) if return_indices else output
+
+
+def _max_unpool2d(x: Tensor, indices: Tensor,
+                  kernel_size: int, stride: int = None, padding: int = 0) -> Tensor:
+    """2d转置卷积(F.conv_transpose2d()) - 已重写简化
+        (在torch底层实现时不采用这种方法，此方法便于学习、效率较低)
+
+    :param x: shape = (N, C, Hin, Win)
+    :param indices: shape = (N, C, Hin, Win)
+    :param kernel_size: int
+    :param stride: int
+    :param padding: int
+    :return: shape = (N, C, Hout, Wout)"""
+    stride = stride or kernel_size
+    # O = S*(In-1) - 2*P + K
+    output_h, output_w = stride * (x.shape[2] - 1) - 2 * padding + kernel_size, \
+                         stride * (x.shape[3] - 1) - 2 * padding + kernel_size
+    output = torch.zeros((*x.shape[:2], output_h, output_w),
+                         dtype=x.dtype, device=x.device)
+    for i in range(x.shape[2]):  # Hin
+        for j in range(x.shape[3]):  # # Win
+            output.flatten(2)[:, torch.arange(0, output.shape[1]), indices[:, :, i, j]] = x[:, :, i, j]
     return output
 
 
 def _avg_pool2d(x: Tensor, kernel_size: int, stride: int = None, padding: int = 0) -> Tensor:
     """平均池化(F.avg_pool2d()) - 已重写简化.
 
-    :param x: shape = (N, Cin, Hin, Win)
+    :param x: shape = (N, C, Hin, Win)
     :param kernel_size: int
     :param stride: int = kernel_size
     :param padding: int
-    :return: shape = (N, Cin, Hout, Wout)"""
+    :return: shape = (N, C, Hout, Wout)"""
 
     stride = stride or kernel_size
     if padding:
@@ -277,8 +305,7 @@ def _conv_transpose2d(x: Tensor, weight: Tensor, bias: Tensor = None,
     :param bias: shape = (Cout,)
     :param stride: int
     :param padding: int
-    :return: shape = (N, Cout, Hout, Wout)
-    """
+    :return: shape = (N, Cout, Hout, Wout)"""
     kernel_size = weight.shape[-2]
     # O = S*(In-1) - 2*P + K
     output_h, output_w = stride * (x.shape[2] - 1) + kernel_size, \
