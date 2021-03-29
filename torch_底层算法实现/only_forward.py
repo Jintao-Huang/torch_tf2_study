@@ -311,7 +311,7 @@ def _conv_transpose2d(x: Tensor, weight: Tensor, bias: Tensor = None,
     # O = S*(In-1) - 2*P + K
     output_h, output_w = stride * (x.shape[2] - 1) + kernel_size[0], \
                          stride * (x.shape[3] - 1) + kernel_size[1]
-    output = torch.empty((x.shape[0], weight.shape[1], output_h, output_w),
+    output = torch.zeros((x.shape[0], weight.shape[1], output_h, output_w),
                          dtype=x.dtype, device=x.device)
     for i in range(x.shape[2]):  # Hin
         for j in range(x.shape[3]):  # # Win
