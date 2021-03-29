@@ -173,83 +173,55 @@ def _zero_padding2d(x: Tensor, padding: int) -> Tensor:
     return output
 
 
-def _max_pool2d(x, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False):
-    """最大池化(F.max_pool2d()).
-    notice: padding的0.不加入求max()运算
+def _max_pool2d(x: Tensor, kernel_size: int, stride: int = None, padding: int = 0) -> Tensor:
+    """最大池化(F.max_pool2d()) - 已重写简化.
 
-    :param x: shape = (N, Cin, Hin, Win) or (Cin, Hin, Win). 不允许2D
-    :param kernel_size: Union[int, tuple(H, W)]
-    :param stride: strides: Union[int, tuple(H, W)] = pool_size
-    :param padding: Union[int, tuple(H, W)]
-    :param .dilation: 未实现.
-    :param .ceil_mode: 未实现.
-    :return: shape = (B, Cin, Hout, Wout)"""
-
-    assert x.dim() in (3, 4)
-    if isinstance(kernel_size, int):
-        kernel_size = kernel_size, kernel_size
+    :param x: shape = (N, Cin, Hin, Win)
+    :param kernel_size: int
+    :param stride: int = kernel_size
+    :param padding: int
+    :return: shape = (N, Cin, Hout, Wout)"""
     stride = stride or kernel_size
-    if isinstance(stride, int):
-        stride = stride, stride
-    if isinstance(padding, int):
-        padding = padding, padding
-
-    # Out(H, W) = (In(H, W) + 2 * padding − kernel_size) // stride + 1
-    output = torch.empty((*x.shape[:-2],
-                          (x.shape[-2] + 2 * padding[0] - kernel_size[0]) // stride[0] + 1,  # Hout
-                          (x.shape[-1] + 2 * padding[1] - kernel_size[1]) // stride[1] + 1),  # Wout
+    # Out = (In + 2*P − K) // S + 1
+    # padding的0.不加入max()运算, 故如此设计
+    output_h, output_w = (x.shape[2] + 2 * padding - kernel_size) // stride + 1, \
+                         (x.shape[3] + 2 * padding - kernel_size) // stride + 1
+    output = torch.empty((*x.shape[:2], output_h, output_w),
                          dtype=x.dtype, device=x.device)
-    # ---------------- 算法
-    for i in range(output.shape[-2]):
-        for j in range(output.shape[-1]):
-            h_start, w_start = i * stride[0] - padding[0], j * stride[1] - padding[1]
-            # h_start, w_start < 0. 会报错
-            h_pos, w_pos = slice(h_start if h_start >= 0 else 0, (h_start + kernel_size[0])), \
-                           slice(w_start if w_start >= 0 else 0, (w_start + kernel_size[1]))
-            output[..., i, j] = torch.max(torch.max(x[..., h_pos, w_pos], dim=-2)[0], dim=-1)[0]  # dim=(-2, -1)
+    for i in range(output.shape[2]):  # Hout
+        for j in range(output.shape[3]):  # # Wout
+            h_start, w_start = i * stride - padding, j * stride - padding
+            h_pos, w_pos = slice(h_start, (h_start + kernel_size)), \
+                           slice(w_start, (w_start + kernel_size))
+            # dim=(-2, -1)
+            output[:, :, i, j] = torch.max(torch.max(x[:, :, h_pos, w_pos], dim=-2)[0], dim=-1)[0]
     return output
 
 
-def _avg_pool2d(x, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False):
-    """平均池化(F.avg_pool2d()).
-    notice: padding的0.加入求mean()运算
+def _avg_pool2d(x: Tensor, kernel_size: int, stride: int = None, padding: int = 0) -> Tensor:
+    """平均池化(F.avg_pool2d()) - 已重写简化.
 
-    :param x: shape = (N, Cin, Hin, Win) or (Cin, Hin, Win). 不允许2D
-    :param kernel_size: Union[int, tuple(H, W)]
-    :param stride: strides: Union[int, tuple(H, W)] = pool_size
-    :param padding: Union[int, tuple(H, W)]
-    :param .dilation: 未实现.
-    :param .ceil_mode: 未实现.
-    :return: shape = (B, Cin, Hout, Wout)"""
+    :param x: shape = (N, Cin, Hin, Win)
+    :param kernel_size: int
+    :param stride: int = kernel_size
+    :param padding: int
+    :return: shape = (N, Cin, Hout, Wout)"""
 
-    assert x.dim() in (3, 4)
-    if isinstance(kernel_size, int):
-        kernel_size = kernel_size, kernel_size
     stride = stride or kernel_size
-    if isinstance(stride, int):
-        stride = stride, stride
-
-    # 这里与max_pool2d 有很大区别，avg_pool2d 计算要和pad的0. 一起求平均
-    if isinstance(padding, int):
-        padding = padding, padding, padding, padding
-    else:
-        padding = padding[1], padding[1], padding[0], padding[0]
     if padding:
-        x = F.pad(x, padding)
-
-    # Out(H, W) = (In(H, W) + 2 * padding − kernel_size) // stride + 1
-    output = torch.empty((*x.shape[:-2],
-                          (x.shape[-2] - kernel_size[0]) // stride[0] + 1,  # Hout (x已加上padding)
-                          (x.shape[-1] - kernel_size[1]) // stride[1] + 1),  # Wout
+        x = _zero_padding2d(x, padding)
+    # Out = (In + 2*P − K) // S + 1
+    # padding的0.不加入mean()运算, 故如此设计
+    output_h, output_w = (x.shape[2] - kernel_size) // stride + 1, \
+                         (x.shape[3] - kernel_size) // stride + 1
+    output = torch.empty((*x.shape[:2], output_h, output_w),
                          dtype=x.dtype, device=x.device)
-    # ---------------- 算法
-    for i in range(output.shape[-2]):
-        for j in range(output.shape[-1]):
-            h_start, w_start = i * stride[0], j * stride[1]
-            # h_start, w_start 一定 >= 0
-            h_pos, w_pos = slice(h_start, (h_start + kernel_size[0])), \
-                           slice(w_start, (w_start + kernel_size[1]))
-            output[..., i, j] = torch.mean(x[..., h_pos, w_pos], dim=(-2, -1))
+    for i in range(output.shape[2]):  # Hout
+        for j in range(output.shape[3]):  # # Wout
+            h_start, w_start = i * stride - padding, j * stride - padding
+            h_pos, w_pos = slice(h_start, (h_start + kernel_size)), \
+                           slice(w_start, (w_start + kernel_size))
+            output[:, :, i, j] = torch.mean(x[:, :, h_pos, w_pos], dim=(-2, -1))
     return output
 
 
@@ -276,17 +248,17 @@ def _conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, pad
     """
     if padding:
         x = _zero_padding2d(x, padding)
-    kernel_size = weight.shape[-2:]
+    kernel_size = weight.shape[-2]
     # Out = (In + 2*P − K) // S + 1
-    output_h, output_w = (x.shape[2] - kernel_size[0]) // stride + 1, \
-                         (x.shape[3] - kernel_size[1]) // stride + 1
+    output_h, output_w = (x.shape[2] - kernel_size) // stride + 1, \
+                         (x.shape[3] - kernel_size) // stride + 1
     output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
                          dtype=x.dtype, device=x.device)
     for i in range(output.shape[2]):  # Hout
         for j in range(output.shape[3]):  # # Wout
             h_start, w_start = i * stride, j * stride
-            h_pos, w_pos = slice(h_start, (h_start + kernel_size[0])), \
-                           slice(w_start, (w_start + kernel_size[1]))
+            h_pos, w_pos = slice(h_start, (h_start + kernel_size)), \
+                           slice(w_start, (w_start + kernel_size))
 
             output[:, :, i, j] = torch.sum(
                 # N, Cout, Cin, KH, KW
@@ -301,23 +273,23 @@ def _conv_transpose2d(x: Tensor, weight: Tensor, bias: Tensor = None,
     (在torch底层实现时不采用这种方法，此方法便于学习、效率较低)
 
     :param x: shape = (N, Cin, Hin, Win)
-    :param weight: shape = (Cin, Cout, KH, KW)
+    :param weight: shape = (Cin, Cout, KH, KW). 其中假设KH=KW
     :param bias: shape = (Cout,)
     :param stride: int
     :param padding: int
     :return: shape = (N, Cout, Hout, Wout)
     """
-    kernel_size = weight.shape[-2:]
+    kernel_size = weight.shape[-2]
     # O = S*(In-1) - 2*P + K
-    output_h, output_w = stride * (x.shape[2] - 1) + kernel_size[0], \
-                         stride * (x.shape[3] - 1) + kernel_size[1]
+    output_h, output_w = stride * (x.shape[2] - 1) + kernel_size, \
+                         stride * (x.shape[3] - 1) + kernel_size
     output = torch.zeros((x.shape[0], weight.shape[1], output_h, output_w),
                          dtype=x.dtype, device=x.device)
     for i in range(x.shape[2]):  # Hin
         for j in range(x.shape[3]):  # # Win
             h_start, w_start = i * stride, j * stride
-            h_pos, w_pos = slice(h_start, (h_start + kernel_size[0])), \
-                           slice(w_start, (w_start + kernel_size[1]))
+            h_pos, w_pos = slice(h_start, (h_start + kernel_size)), \
+                           slice(w_start, (w_start + kernel_size))
             # N, Cin, Cout, KH, KW
             output[:, :, h_pos, w_pos] += torch.sum(
                 x[:, :, None, i:i + 1, j:j + 1] * weight[None, :, :, :, :], dim=1)
@@ -332,7 +304,7 @@ def __conv2d(x: Tensor, weight: Tensor, bias: Tensor = None,
     """2d卷积(F.conv2d()) - 复杂版
 
     :param x: shape = (N, Cin, Hin, Win)
-    :param weight: shape = (groups * G_Cout, G_Cin, KH, KW).
+    :param weight: shape = (groups * G_Cout, G_Cin, KH, KW).  假设KH=KW
     :param bias: shape = (Cout,)
     :param stride: int
     :param padding: int
@@ -343,11 +315,11 @@ def __conv2d(x: Tensor, weight: Tensor, bias: Tensor = None,
 
     if padding:
         x = _zero_padding2d(x, padding)
-    kernel_size = dilation * (weight.shape[-2] - 1) + 1, dilation * (weight.shape[-1] - 1) + 1
+    kernel_size = dilation * (weight.shape[-2] - 1) + 1
 
     # O = (I + 2*P - (D*(K-1)+1)) // S + 1
-    output_h, output_w = (x.shape[2] - kernel_size[0]) // stride + 1, \
-                         (x.shape[3] - kernel_size[1]) // stride + 1
+    output_h, output_w = (x.shape[2] - kernel_size) // stride + 1, \
+                         (x.shape[3] - kernel_size) // stride + 1
     output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
                          dtype=x.dtype, device=x.device)
     for g in range(groups):
@@ -357,8 +329,8 @@ def __conv2d(x: Tensor, weight: Tensor, bias: Tensor = None,
         for i in range(output.shape[2]):  # Hout
             for j in range(output.shape[3]):  # # Wout
                 h_start, w_start = i * stride, j * stride
-                h_pos, w_pos = slice(h_start, (h_start + kernel_size[0]), dilation), \
-                               slice(w_start, (w_start + kernel_size[1]), dilation)
+                h_pos, w_pos = slice(h_start, (h_start + kernel_size), dilation), \
+                               slice(w_start, (w_start + kernel_size), dilation)
                 output[:, cout_pos, i, j] = torch.sum(
                     # N, G_Cout, G_Cin, KH, KW
                     x[:, None, cin_pos, h_pos, w_pos] * weight[None, cout_pos, :, :, :], dim=(-3, -2, -1)) \
