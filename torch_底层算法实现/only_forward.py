@@ -512,11 +512,9 @@ def _rnn_tanh_cell(x: Tensor, hx: Tensor, w_ih: Tensor, w_hh: Tensor,
     :param b_ih: shape = (Ch,)
     :param b_hh: shape = (Ch,)
     :return: shape = (N, Ch)"""
-    # y_i / hx_i+1 = tanh (x_i @ w_ih^T + b_ih + hx_i @ w_hh^T + b_hh)
-
-    batch_size = x.shape[0]
+    # y_i / hx_i+1 = tanh(x_i @ w_ih^T + b_ih + hx_i @ w_hh^T + b_hh)
     if hx is None:
-        hx = torch.zeros(batch_size, w_ih.shape[0])  # weight[0].shape[0]: Ch
+        hx = torch.zeros(x.shape[0], w_ih.shape[0])  # w_ih.shape[0]: Ch
     return torch.tanh(x @ w_ih.t() + (b_ih if b_ih is not None else 0.) +
                       hx @ w_hh.t() + (b_hh if b_hh is not None else 0.))
 
@@ -634,12 +632,12 @@ def _lstm_cell(x: Tensor, hx: Union[Tuple[Tensor, ...], List[Tensor]],
     :param b_hh: shape = (Ch * 4,)
     :return: Tuple(y/h_1: shape[N, Ch], c_1: shape[N, Ch])
     """
-    # i = sigmoid (x_i @ Wii^T + bii + h_i @ Whi^T + bhi)
-    # f = sigmoid (x_i @ Wif^T + bif + h_i @ Whf^T + bhf)
-    # g = tanh (x_i @ Wig^T + big + h_i @ Whg^T + bhg)
-    # o = sigmoid (x_i @ Wio^T + bio + h_i @ Who^T + bho)
+    # i = sigmoid(x_i @ Wii^T + bii + h_i @ Whi^T + bhi)
+    # f = sigmoid(x_i @ Wif^T + bif + h_i @ Whf^T + bhf)
+    # g = tanh(x_i @ Wig^T + big + h_i @ Whg^T + bhg)
+    # o = sigmoid(x_i @ Wio^T + bio + h_i @ Who^T + bho)
     # c_i+1 = f * c_i + i * g   # Hadamard乘积(点乘)
-    # y_i / h_i+1 = o * tanh (c_i+1)
+    # y_i / h_i+1 = o * tanh(c_i+1)
     c_hide = w_ih.shape[0] // 4  # Ch(channels_hide)
     h, c = hx
     if h is None:
@@ -678,9 +676,9 @@ def _gru_cell(x: Tensor, hx: Tensor, w_ih: Tensor, w_hh: Tensor,
     if hx is None:
         hx = torch.zeros(x.shape[0], c_hide)  # weight[0].shape[0]: Ch
 
-    # r = sigmoid (x_i @ Wir^T + bir + h_i @ Whr^T + bhr)  
-    # z = sigmoid (x_i @ Wiz^T + biz + h_i @ Whz^T + bhz)  
-    # n = tanh (x_i @ Win^T + bin + r*(h_i @ Whn^T + bhn))  
+    # r = sigmoid(x_i @ Wir^T + bir + h_i @ Whr^T + bhr)  
+    # z = sigmoid(x_i @ Wiz^T + biz + h_i @ Whz^T + bhz)  
+    # n = tanh(x_i @ Win^T + bin + r*(h_i @ Whn^T + bhn))  
     # y_i / h_i+1 = (1 − z) * n + z * h_i
     r = torch.sigmoid(x @ w_ih[0:c_hide].t() + (b_ih[0:c_hide] if b_ih is not None else 0) +
                       hx @ w_hh[0:c_hide].t() + (b_hh[0:c_hide] if b_hh is not None else 0))
