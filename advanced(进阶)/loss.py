@@ -65,15 +65,3 @@ def weighted_binary_focal_loss(y_pred, y_true, alpha=0.25, gamma=2, with_logits=
     # y_true 为-1. 即: 既不是正样本、也不是负样本。
     return func((alpha * y_true * -torch.log(y_pred) * (1 - y_pred) ** gamma +
                  (1 - alpha) * (1 - y_true) * -torch.log(1 - y_pred) * y_pred ** gamma) * (y_true >= 0).float())
-
-
-def smooth_l1_loss(y_pred, y_true, divide_line=1.):
-    """无论divide_line为多少, 交界处的梯度为1
-
-    :param y_pred: shape(N, num) or (...)
-    :param y_true: shape(N, num) or (...)
-    :param divide_line: = 分界线
-    :return: ()"""
-
-    diff = torch.abs(y_pred - y_true)
-    return torch.mean(torch.where(diff < divide_line, 0.5 / divide_line * diff ** 2, diff - 0.5 * divide_line))

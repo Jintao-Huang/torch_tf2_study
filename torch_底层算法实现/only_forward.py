@@ -50,54 +50,84 @@ def _softmax(x: Tensor, dim: int) -> Tensor:
 
 # --------------------------------------------------- loss
 
-def to_categorical(x: Tensor, num_classes: int) -> Tensor:
-    """转热码 - 已重写简化
+def _one_hot(x: Tensor, num_classes: int = -1) -> Tensor:
+    """(F.one_hot()) - 已重写简化
 
-    :param x: shape = (...). int
-    :param num_classes: int. 分类数
-    :return: shape = (..., num_classes). float32"""
+    :param x: shape = (N,), torch.long.
+    :param num_classes: int. default: max(x) + 1
+    :return: shape = (N, num_classes). torch.long"""
+    if num_classes == -1:
+        num_classes = torch.max(x) + 1
+    return torch.eye(num_classes, dtype=torch.long, device=x.device)[x]
 
-    return torch.eye(num_classes, dtype=torch.float, device=x.device)[x]
+
+def _nll_loss(pred: Tensor, target: Tensor) -> Tensor:
+    """(F.nll_loss()) - 已重写简化
+
+    :param pred: shape = (N, In).
+    :param target: shape = (N,) torch.long.
+    :return: shape = ()
+    """
+    target = _one_hot(target, pred.shape[-1])
+    return torch.mean(torch.sum(pred * -target, dim=-1))
 
 
-def _cross_entropy(y_pred: Tensor, y_true: Tensor) -> Tensor:
-    """交叉熵损失函数(F.cross_entropy()). y_pred 未过softmax
+def _cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
+    """交叉熵损失(F.cross_entropy()) - 已重写简化
+    (边界处(0, 1)的处理与torch不同)
 
-    :param y_pred: shape = (N, num_classes)
-    :param y_true: shape = (N,)
+    :param pred: shape = (N, In). 未过softmax
+    :param target: shape = (N,) torch.long. 未过ont_hot
     :return: shape = ()"""
 
-    y_pred = torch.clamp_min(torch.softmax(y_pred, dim=-1), 1e-6)  # 防log(0)
-    y_true = to_categorical(y_true, y_pred.shape[-1])
-
-    return torch.mean(torch.sum(y_true * -torch.log(y_pred), -1))
+    pred = F.log_softmax(pred, dim=-1)
+    return _nll_loss(pred, target)
 
 
-def _binary_cross_entropy(y_pred, y_true, with_logits=False):
-    """交叉熵损失函数(F.binary_cross_entropy() and F.binary_cross_entropy_with_logits())
+def _binary_cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
+    """二元交叉熵损失(F.binary_cross_entropy())
 
-    :param y_pred: shape = (N,)
-    :param y_true: shape = (N,)
-    :param with_logits: y_pred是否未过sigmoid
+    :param pred: shape = (N,)
+    :param target: shape = (N,) torch.float32
     :return: shape = ()"""
 
-    assert y_pred.dtype in (torch.float32, torch.float64)
-    if with_logits:
-        y_pred = torch.sigmoid(y_pred)
-    # 此处不检查y_pred 要在 [0., 1.] 区间内
-    y_pred = torch.clamp(y_pred, 1e-6, 1 - 1e-6)
-    # 前式与后式关于0.5对称(The former and the latter are symmetric about 0.5)
-    return torch.mean(y_true * -torch.log(y_pred) + (1 - y_true) * -torch.log(1 - y_pred))
+    # The former and the latter are symmetric about 0.5
+    # F.logsigmoid(- pred)) 即 F.log(1 - F.sigmoid(y_pred))
+    return torch.mean(target * -torch.log(pred) + (1 - target) * -torch.log(1 - pred))
 
 
-def _mse_loss(y_pred, y_true):
-    """均方误差损失(F.mse_loss() 只实现了部分功能)
+def _binary_cross_entropy_with_logits(pred: Tensor, target: Tensor) -> Tensor:
+    """二元交叉熵损失(F.binary_cross_entropy_with_logits())
 
-    :param y_pred: shape = (N, num) or (...)
-    :param y_true: shape = (N, num) or (...)
+    :param pred: shape = (N,)
+    :param target: shape = (N,) torch.float32
     :return: shape = ()"""
 
-    return torch.mean((y_true - y_pred) ** 2)
+    # The former and the latter are symmetric about 0.5
+    # F.logsigmoid(- pred)) 即 F.log(1 - F.sigmoid(y_pred))
+    return torch.mean(target * -F.logsigmoid(pred) + (1 - target) * -F.logsigmoid(- pred))
+
+
+def _mse_loss(pred: Tensor, target: Tensor) -> Tensor:
+    """均方误差损失(F.mse_loss()) - 已重写简化
+
+    :param pred: shape = (N, In)
+    :param target: shape = (N, In)
+    :return: shape = ()"""
+
+    return torch.mean((target - pred) ** 2)
+
+
+def _smooth_l1_loss(pred: Tensor, target: Tensor, beta: float = 1.) -> Tensor:
+    """(F.smooth_l1_loss()) - 已重写简化
+
+    :param pred: shape(N, In)
+    :param target: shape(N, In)
+    :param beta: smooth线
+    :return: ()"""
+
+    diff = torch.abs(target - pred)
+    return torch.mean(torch.where(diff < beta, 0.5 * diff ** 2 / beta, diff - 0.5 * beta))
 
 
 # --------------------------------------------------- layers
