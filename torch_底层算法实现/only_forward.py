@@ -91,9 +91,8 @@ def _binary_cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
     :param target: shape = (N,) torch.float32
     :return: shape = ()"""
 
-    # The former and the latter are symmetric about 0.5
-    # F.logsigmoid(- pred)) 即 F.log(1 - F.sigmoid(y_pred))
-    return torch.mean(target * -torch.log(pred) + (1 - target) * -torch.log(1 - pred))
+    return torch.mean(target * torch.clamp_max(-torch.log(pred), 100) +
+                      (1 - target) * torch.clamp_max(-torch.log(1 - pred), 100))
 
 
 def _binary_cross_entropy_with_logits(pred: Tensor, target: Tensor) -> Tensor:
@@ -103,9 +102,8 @@ def _binary_cross_entropy_with_logits(pred: Tensor, target: Tensor) -> Tensor:
     :param target: shape = (N,) torch.float32
     :return: shape = ()"""
 
-    # The former and the latter are symmetric about 0.5
     # F.logsigmoid(- pred)) 即 F.log(1 - F.sigmoid(y_pred))
-    return torch.mean(target * -F.logsigmoid(pred) + (1 - target) * -F.logsigmoid(- pred))
+    return torch.mean(target * -F.logsigmoid(pred) + (1 - target) * -F.logsigmoid(-pred))
 
 
 def _mse_loss(pred: Tensor, target: Tensor) -> Tensor:
@@ -401,7 +399,7 @@ def _nearest_interpolate(x: Tensor, size: Tuple[int, int] = None, scale_factor: 
     """最近邻插值(F.interpolate(mode="nearest")). 与torch实现相同，与cv实现是否相同未知
 
     :param x: shape = (N, C, Hin, Win) - 像素点当作点来看待(与bilinear不同)
-    :param size: Tuple[Hout, Wout]
+    :param size: Tuple(Hout, Wout)
     :param scale_factor: size和scale_factor必须且只能提供其中的一个参数
     :return: shape = (N, C, Hout, Wout)
     """
