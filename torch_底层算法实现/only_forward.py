@@ -131,7 +131,7 @@ def _smooth_l1_loss(pred: Tensor, target: Tensor, beta: float = 1.) -> Tensor:
 # --------------------------------------------------- layers
 def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Tensor, bias: Tensor,
                 training: bool = False, momentum: float = 0.1, eps: float = 1e-5) -> Tensor:
-    """BN(F.batch_norm())
+    """BN(F.batch_norm()). 对NHW做归一化.
 
     :param x: shape = (N, In) or (N, C, H, W)
     :param running_mean: shape = (In,) 或 (C,) 下同
@@ -234,8 +234,7 @@ def _max_pool2d(x: Tensor, kernel_size: int, stride: int = None, padding: int = 
 
 def _max_unpool2d(x: Tensor, indices: Tensor,
                   kernel_size: int, stride: int = None, padding: int = 0) -> Tensor:
-    """2d转置卷积(F.conv_transpose2d())
-        (在torch底层实现时不采用这种方法，此方法便于学习、效率较低)
+    """(F.max_unpool2d())
 
     :param x: shape = (N, C, Hin, Win)
     :param indices: shape = (N, C, Hin, Win)
