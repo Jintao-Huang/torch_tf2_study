@@ -107,7 +107,6 @@ def _box_iou(boxes1, boxes2):
 
 def box_giou(boxes1, boxes2):
     """Generalized IoU (https://arxiv.org/pdf/1902.09630.pdf).
-
     Solved the situation where the IoU is zero, Cannot reverse transfer the gradient
 
     :return: range: [-1., 1.]"""
@@ -132,9 +131,13 @@ def box_giou(boxes1, boxes2):
     return giou
 
 
+def _cal_distance2(dx, dy):
+    """欧式距离的平方(Euclidean distance squared)"""
+    return dx ** 2 + dy ** 2
+
+
 def box_diou(boxes1, boxes2):
     """Distance IoU (https://arxiv.org/pdf/1911.08287.pdf).
-
     the overlapping area and the distance between the center points are considered at the same time
 
     :return: range: [-1., 1.]"""
@@ -157,20 +160,15 @@ def box_diou(boxes1, boxes2):
     center_boxes2 = (boxes2[:, 2:] + boxes2[:, :2]) / 2  # [M, 2]
     dx_dy_center = center_boxes1[:, None] - center_boxes2[None, :]
 
-    def cal_distance2(dx, dy):
-        """欧式距离的平方(Euclidean distance squared)"""
-        return dx ** 2 + dy ** 2
-
     # dist2_outer: (外边框对角线距离的平方) The square of the diagonal distance of the outer border
-    dist2_outer = cal_distance2(wh_outer[:, :, 0], wh_outer[:, :, 1])
-    dist2_center = cal_distance2(dx_dy_center[:, :, 0], dx_dy_center[:, :, 1])
+    dist2_outer = _cal_distance2(wh_outer[:, :, 0], wh_outer[:, :, 1])
+    dist2_center = _cal_distance2(dx_dy_center[:, :, 0], dx_dy_center[:, :, 1])
     diou = iou - dist2_center / dist2_outer
     return diou
 
 
 def box_ciou(boxes1, boxes2):
     """Complete IoU Loss (https://arxiv.org/pdf/2005.03572.pdf).
-
     The consistency of the aspect ratio between the anchor boxes and the target boxes is also extremely important
 
     :return: range: [-1., 1.]"""
@@ -196,13 +194,9 @@ def box_ciou(boxes1, boxes2):
     center_boxes2 = (boxes2[:, 2:] + boxes2[:, :2]) / 2  # [M, 2]
     dx_dy_center = center_boxes1[:, None] - center_boxes2[None, :]
 
-    def cal_distance2(dx, dy):
-        """欧式距离的平方(Euclidean distance squared)"""
-        return dx ** 2 + dy ** 2
-
     # distance2_outer: (外边框对角线距离的平方) The square of the diagonal distance of the outer border
-    distance2_outer = cal_distance2(wh_outer[:, :, 0], wh_outer[:, :, 1])  #
-    distance2_center = cal_distance2(dx_dy_center[:, :, 0], dx_dy_center[:, :, 1])
+    distance2_outer = _cal_distance2(wh_outer[:, :, 0], wh_outer[:, :, 1])  #
+    distance2_center = _cal_distance2(dx_dy_center[:, :, 0], dx_dy_center[:, :, 1])
     # 3. calculate 惩罚项2(aspect_ratios差距). 公式详见论文, 变量同论文
     v = (4 / math.pi ** 2) * \
         (torch.atan(wh_boxes1[:, 0] / wh_boxes1[:, 1])[:, None] -
