@@ -1,10 +1,88 @@
 # Author: Jintao Huang
-# Time: 2020-5-23
+# Date: 
 
-from torchvision.ops.boxes import box_area, box_iou
 import torch
+from torch import Tensor
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision.ops.boxes import box_area, box_iou
 import math
 
+
+# ------------------------------------ activation
+
+def swish(x: Tensor) -> Tensor:
+    """
+
+    :param x: shape(N, In)
+    :return: shape = x.shape
+    """
+    return x * torch.sigmoid(x)
+
+
+def mish(x: Tensor) -> Tensor:
+    """
+
+    :param x: shape(N, In)
+    :return: shape = x.shape
+    """
+    return x * torch.tanh(F.softplus(x))
+
+
+# ------------------------------------ layers
+def depthwise_conv(
+        in_channels: int,  # (in_channels == out_channels)
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        bias: bool = False
+) -> nn.Conv2d:
+    # 深度的卷积(对单个C，多个点(kernel_size)分开做卷积)
+    return nn.Conv2d(in_channels, in_channels, kernel_size, stride, padding, groups=in_channels, bias=bias)
+
+
+def pointwise_conv(
+        in_channels: int,
+        out_channels: int,
+        stride: int = 1,
+        padding: int = 0,
+        bias: bool = False
+) -> nn.Conv2d:
+    # 点的卷积(对全部C，一个点做卷积)
+    return nn.Conv2d(in_channels, out_channels, 1, stride, padding, bias=bias)
+
+
+# ------------------------------------ loss
+
+def label_smoothing_cross_entropy(pred: Tensor, target: Tensor, smoothing: float = 0.1) -> Tensor:
+    """reference: https://github.com/seominseok0429/label-smoothing-visualization-pytorch
+
+    :param pred: shape(N, In). 未过softmax
+    :param target: shape(N,)
+    :param smoothing: float
+    :return: shape()
+    """
+    pred = F.log_softmax(pred, dim=-1)
+    nll_loss = F.nll_loss(pred, target)
+    smooth_loss = -torch.mean(pred)
+    return (1 - smoothing) * nll_loss + smoothing * smooth_loss
+
+
+def weighted_binary_focal_loss(pred, target, alpha=0.25, gamma=2.):
+    """f(x) = alpha * (1 - x)^a * -ln(pred). 已过sigmoid
+
+    :param pred: shape = (N,)
+    :param target: shape = (N,)
+    :param alpha: float
+        The weight of the negative sample and the positive sample. (alpha * positive + (1 - alpha) * negative)
+    :param gamma: float
+    :return: shape = ()"""
+    # sum / mean
+    return torch.sum(alpha * (1 - pred) ** gamma * target * torch.clamp_max(-torch.log(pred), 100) +
+                     (1 - alpha) * pred ** gamma * (1 - target) * torch.clamp_max(-torch.log(1 - pred), 100))
+
+
+# ------------------------------------ iou
 
 def _box_area(boxes):
     """copy from torchvision.ops.boxes.box_area(). """
@@ -58,7 +136,7 @@ def box_diou(boxes1, boxes2):
     """Distance IoU (https://arxiv.org/pdf/1911.08287.pdf).
 
     the overlapping area and the distance between the center points are considered at the same time
-    
+
     :return: range: [-1., 1.]"""
     # 1. calculate iou
     area1 = box_area(boxes1)

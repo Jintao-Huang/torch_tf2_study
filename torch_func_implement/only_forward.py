@@ -69,7 +69,7 @@ def _nll_loss(pred: Tensor, target: Tensor) -> Tensor:
     :return: shape = ()
     """
     target = _one_hot(target, pred.shape[-1])
-    return torch.mean(torch.sum(pred * -target, dim=-1))
+    return torch.mean(torch.sum(target * -pred, dim=-1))
 
 
 def _cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
@@ -96,7 +96,7 @@ def _binary_cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
 
 
 def _binary_cross_entropy_with_logits(pred: Tensor, target: Tensor) -> Tensor:
-    """二元交叉熵损失(F.binary_cross_entropy_with_logits())
+    """二元交叉熵损失(F.binary_cross_entropy_with_logits()). 未过sigmoid
 
     :param pred: shape = (N,)
     :param target: shape = (N,) torch.float32
