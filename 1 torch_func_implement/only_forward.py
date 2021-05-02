@@ -39,7 +39,7 @@ def _tanh(x: Tensor) -> Tensor:
 
 
 def _softmax(x: Tensor, dim: int) -> Tensor:
-    """softmax(F.softmax())
+    """(F.softmax())
 
     :param x: shape = (N, In)
     :param dim: int. 一般dim设为-1(表示输出Tensor的和为1.的dim为哪个)
@@ -69,12 +69,11 @@ def _nll_loss(pred: Tensor, target: Tensor) -> Tensor:
     :return: shape = ()
     """
     target = _one_hot(target, pred.shape[-1])
-    return torch.mean(torch.sum(target * -pred, dim=-1))
+    return torch.mean(torch.sum(-pred * target, dim=-1))
 
 
 def _cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
     """交叉熵损失(F.cross_entropy())
-    (边界处(0, 1)的处理与torch不同)
 
     :param pred: shape = (N, In). 未过softmax
     :param target: shape = (N,) torch.long. 未过ont_hot
@@ -91,8 +90,8 @@ def _binary_cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
     :param target: shape = (N,) torch.float32
     :return: shape = ()"""
 
-    return torch.mean(target * torch.clamp_max(-torch.log(pred), 100) +
-                      (1 - target) * torch.clamp_max(-torch.log(1 - pred), 100))
+    return torch.mean(torch.clamp_max(-torch.log(pred), 100) * target +  # 防止inf
+                      torch.clamp_max(-torch.log(1 - pred), 100) * (1 - target))
 
 
 def _binary_cross_entropy_with_logits(pred: Tensor, target: Tensor) -> Tensor:
@@ -103,7 +102,7 @@ def _binary_cross_entropy_with_logits(pred: Tensor, target: Tensor) -> Tensor:
     :return: shape = ()"""
 
     # F.logsigmoid(- pred)) 即 F.log(1 - F.sigmoid(y_pred))
-    return torch.mean(target * -F.logsigmoid(pred) + (1 - target) * -F.logsigmoid(-pred))
+    return torch.mean(-F.logsigmoid(pred) * target + -F.logsigmoid(-pred) * (1 - target))
 
 
 def _mse_loss(pred: Tensor, target: Tensor) -> Tensor:
