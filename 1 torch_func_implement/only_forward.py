@@ -501,118 +501,107 @@ def _rnn_tanh_cell(x: Tensor, hx: Tensor, w_ih: Tensor, w_hh: Tensor,
                    b_ih: Tensor = None, b_hh: Tensor = None) -> Tensor:
     """torch.rnn_tanh_cell()
 
-    :param x: shape = (N, Cin)
-    :param hx: shape = (N, Ch)
-    :param w_ih: shape = (Ch, Cin)
-    :param w_hh: shape = (Ch, Ch)
-    :param b_ih: shape = (Ch,)
-    :param b_hh: shape = (Ch,)
-    :return: shape = (N, Ch)"""
+    :param x: shape = (N, In)
+    :param hx: shape = (N, Out)
+    :param w_ih: shape = (Out, In)
+    :param w_hh: shape = (Out, Out)
+    :param b_ih: shape = (Out,)
+    :param b_hh: shape = (Out,)
+    :return: shape = (N, Out)"""
     # y_i / hx_i+1 = tanh(x_i @ w_ih^T + b_ih + hx_i @ w_hh^T + b_hh)
     if hx is None:
-        hx = torch.zeros(x.shape[0], w_ih.shape[0])  # w_ih.shape[0]: Ch
+        hx = torch.zeros(x.shape[0], w_ih.shape[0])  # w_ih.shape[0]: Out
     return torch.tanh(x @ w_ih.t() + (b_ih if b_ih is not None else 0.) +
                       hx @ w_hh.t() + (b_hh if b_hh is not None else 0.))
 
 
-def _rnn_tanh(x: Tensor, hx: Tensor, params: List[Tensor], has_biases: bool = True, num_layers: int = 1) \
+def _rnn_tanh(x: Tensor, hx: Tensor, params: List[Tensor], has_biases: bool) \
         -> Tuple[Tensor, Tensor]:
-    """(复现: torch.rnn_tanh())
+    """(复现: 类似于torch.rnn_tanh(num_layers=1)) - 已简化(num_layers=1). NL = 1
     规定: dropout: float = 0., train: bool = ..., bidirectional: bool = False, batch_first: bool = False
-    使用e.g.: _rnn_tanh(x, hx, [w_ih, w_hh, b_ih, b_hh, w_ih2, w_hh2, b_ih2, b_hh2], True, 2)
+    使用e.g.: _rnn_tanh(x, hx, [w_ih, w_hh, b_ih, b_hh], True)
 
-    :param x: shape = (T, N, Cin)
-    :param hx: shape = (L, N, Ch)
-    :param params: [w0_ih, w0_hh, b0_ih, b0_hh, w1_ih, ...] shape = [(Ch, Cin), (Ch, Ch), (Ch,), (Ch), (Ch, Ch), ...]
-    :param has_biases: 若为False: 则len(params)应为2 * L. True: len(params)应为4 * L
-    :param num_layers: L
-    :return: (y: shape(T, N, Ch), hy: shape(L, N, Ch))
+    :param x: shape = (L, N, In). Len of Sentence
+    :param hx: shape = (NL, N, Out). num of layers
+    :param params: [w0_ih, w0_hh, b0_ih, b0_hh] shape = [(Out, In), (Out, Out), (Out,), (Out), (Out, Out)]
+    :param has_biases: 若为False: 则len(params)应为2 * NL. True: len(params)应为4 * NL
+    :return: (y: shape(L, N, Out), hy: shape(NL, N, Out))
     """
 
-    hy = []  # 存储每层最后的hy
-    for i in range(num_layers):
-        y = []  # 一层的输出
-        _hx = hx[i]  # 保存_rnn_tanh_cell()的hx输入
-        if has_biases:
-            w_ih, w_hh, b_ih, b_hh = params[:4]
-            params = params[4:]
-        else:
-            w_ih, w_hh, b_ih, b_hh = (*params[:2], None, None)
-            params = params[2:]
-        for j in range(x.shape[0]):
-            y.append(_rnn_tanh_cell(x[j], _hx, w_ih, w_hh, b_ih, b_hh))
-            _hx = y[-1]
-        hy.append(_hx)
-        x = y = torch.stack(y)
-    hy = torch.stack(hy)
-    return y, hy
+    y = []  # 一层的输出
+    hx_l0 = hx[0]
+    w_ih, w_hh, b_ih, b_hh = params if has_biases else (*params, None, None)
+    for i in range(x.shape[0]):
+        hx_l0 = _rnn_tanh_cell(x[i], hx_l0, w_ih, w_hh, b_ih, b_hh)
+        y.append(hx_l0)
+    y = torch.stack(y)
+    return y, y[-1][None]
 
 
-def __rnn_tanh(x: Tensor, hx: Tensor, params: List[Tensor], has_biases: bool = True, num_layers: int = 1,
+# x = torch.randn(5, 3, 10)  # (L, N, In)
+# hx = torch.randn(1, 3, 20)  # (NL, N, Out)
+# rnn = nn.RNN(10, 20, 1)
+# output, hn = rnn(x, hx)
+# output2, hn2 = _rnn_tanh(x, hx, [rnn.weight_ih_l0, rnn.weight_hh_l0, rnn.bias_ih_l0, rnn.bias_hh_l0], True)
+# print(torch.all(torch.abs(output - output2) < 1e-6))  # True
+# print(torch.all(torch.abs(hn - hn2) < 1e-6))  # True
+
+
+def __rnn_tanh(x: Tensor, hx: Tensor, params: List[Tensor], has_biases: bool, num_layers: int,
                dropout: float = 0., train: bool = True,
-               bidirectional: bool = False, batch_first: bool = False) -> Tuple[Tensor, Tensor]:
+               bidirectional: bool = False) -> Tuple[Tensor, Tensor]:
     """(复现: torch.rnn_tanh()) - 复杂版
-    使用e.g.: y1, hy1 = __rnn_tanh(x, h_bi, [w_ih, w_hh, b_ih, b_hh,
+    使用e.g.: y1, hy1 = __rnn_tanh(x, hx, [w_ih, w_hh, b_ih, b_hh,
                                w_ih_r, w_hh_r, b_ih_r, b_hh_r,
                                w_ih1, w_hh1, b_ih1, b_hh1,
                                w_ih1_r, w_hh1_r, b_ih1_r, b_hh1_r
                                ], True, 2, 0.2, True, True, True)
 
-    :param x: shape = (T, N, Cin)
-    :param hx: shape = (L * Bi, N, Ch)
-    :param params: [w0_ih, w0_hh, b0_ih, b0_hh, w1_ih, ...] shape = [(Ch, Cin), (Ch, Ch), (Ch,), (Ch), (Ch, Ch), ...]
-        or [w0_ih, ..., w0_ih_r, ..., w1_ih,...] shape = [(Ch, Cin), ..., (Ch, Cin), ...(Ch, Ch), ...]
-    :param has_biases: 若为False: 则len(params)应为L * Bi * 2. True: len(params)应为L * Bi * 4
-    :param num_layers: L
+    :param x: shape = (L, N, In)
+    :param hx: shape = (NL * ND, N, Out). ND: num of direction
+    :param params: [w0_ih, w0_hh, b0_ih, b0_hh, w1_ih, ...] shape = [(Out, In), (Out, Out), (Out,), (Out), (Out, Out), ...]
+        or [w0_ih, ..., w0_ih_r, ..., w1_ih,...] shape = [(Out, In), ..., (Out, In), ...(Out, Out), ...]
+    :param has_biases: 若为False: 则len(params)应为NL * ND * 2. True: len(params)应为NL * ND * 4
+    :param num_layers: NL
     :param dropout: 除最后一层
     :param train:
-    :param bidirectional: 若False: Bi = 1; True: Bi = 2.
-    :param batch_first: x.shape = (N, T, Cin). 返回的y.shape = (N, T, Bi * Ch)
-    :return: (y: shape(T, N, Bi * Ch), hy: shape(L * Bi, N, Ch))
+    :param bidirectional: 若False: ND = 1; True: ND = 2.
+    :return: (y: shape(L, N, ND * Out), hy: shape(NL * ND, N, Out))
     """
-    if batch_first:
-        x = torch.transpose(x, 0, 1)
-    hy, hy_r = [], []  # 存储每层最后的hy, hy_r
+    hy = []  # 存储每层最后的hy/hy_r
     for i in range(num_layers):
-        y, y_r = [], []  # 一层的输出
-        # 保存_rnn_tanh_cell()的hx输入
         if bidirectional:
-            _hx, _hx_r = hx[2 * i], hx[2 * i + 1]
-            if has_biases:
-                w_ih, w_hh, b_ih, b_hh, w_ih_r, w_hh_r, b_ih_r, b_hh_r = params[:8]
-                params = params[8:]
-            else:
-                w_ih, w_hh, w_ih_r, w_hh_r = params[:4]
-                b_ih, b_hh, b_ih_r, b_hh_r = None, None, None, None
-                params = params[4:]
-            for j in range(x.shape[0]):
-                y.append(_rnn_tanh_cell(x[j], _hx, w_ih, w_hh, b_ih, b_hh))
-                y_r.append(_rnn_tanh_cell(x[x.shape[0] - j - 1], _hx_r, w_ih_r, w_hh_r, b_ih_r, b_hh_r))
-                _hx = y[-1]
-                _hx_r = y_r[-1]
-            hy += [_hx, _hx_r]
-            y_r.reverse()
-            x = y = torch.cat([torch.stack(y), torch.stack(y_r)], dim=-1)
+            hx_li, hx_r_li = hx[2 * i:2 * i + 1], hx[2 * i + 1:2 * (i + 1)]
+            params_li, params_li_r = (params[8 * i:8 * i + 4], params[8 * i + 4:8 * (i + 1)]) if has_biases \
+                else (params[4 * i:4 * i + 2], params[4 * i + 2:4 * (i + 1)])
+            y, _ = _rnn_tanh(x, hx_li, params_li, has_biases)
+            y_r, _ = _rnn_tanh(torch.flip(x, (0,)), hx_r_li, params_li_r, has_biases)
+            x = torch.cat([y, torch.flip(y_r, (0,))], dim=-1)
+            hy += [y[-1], y_r[-1]]
         else:
-            _hx = hx[i]
-            if has_biases:
-                w_ih, w_hh, b_ih, b_hh = params[:4]
-                params = params[4:]
-            else:
-                w_ih, w_hh = params[:2]
-                b_ih, b_hh = None, None
-                params = params[2:]
-            for j in range(x.shape[0]):
-                y.append(_rnn_tanh_cell(x[j], _hx, w_ih, w_hh, b_ih, b_hh))
-                _hx = y[-1]
-            hy.append(_hx)
-            x = y = torch.stack(y)
+            hx_li = hx[i:i + 1]
+            params_li = params[4 * i:4 * (i + 1)] if has_biases else params[2 * i:2 * (i + 1)]
+            x, _ = _rnn_tanh(x, hx_li, params_li, has_biases)
+            hy.append(x[-1])
         if dropout and i + 1 != num_layers:
             x = F.dropout(x, dropout, train)
     hy = torch.stack(hy)
-    if batch_first:
-        y = torch.transpose(y, 0, 1)
-    return y, hy
+    return x, hy
+
+# x = torch.randn(5, 3, 10)  # (L, N, In)
+# hx = torch.randn(4, 3, 20)  # (NL, N, Out)
+# rnn = nn.RNN(10, 20, 2, True, False, 0.2, True)
+# torch.manual_seed(0)
+# output, hn = rnn(x, hx)
+# torch.manual_seed(0)
+# output2, hn2 = __rnn_tanh(x, hx, [
+#     rnn.weight_ih_l0, rnn.weight_hh_l0, rnn.bias_ih_l0, rnn.bias_hh_l0,
+#     rnn.weight_ih_l0_reverse, rnn.weight_hh_l0_reverse, rnn.bias_ih_l0_reverse, rnn.bias_hh_l0_reverse,
+#     rnn.weight_ih_l1, rnn.weight_hh_l1, rnn.bias_ih_l1, rnn.bias_hh_l1,
+#     rnn.weight_ih_l1_reverse, rnn.weight_hh_l1_reverse, rnn.bias_ih_l1_reverse, rnn.bias_hh_l1_reverse
+# ],  True, 2, 0.2, True, True)
+# print(torch.all(torch.abs(output - output2) < 1e-6))  # True
+# print(torch.all(torch.abs(hn - hn2) < 1e-6))  # True
 
 
 def _lstm_cell(x: Tensor, hx: Union[Tuple[Tensor, ...], List[Tensor]],
