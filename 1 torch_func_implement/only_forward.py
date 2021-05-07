@@ -310,16 +310,62 @@ def _conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, pad
     output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
                          dtype=x.dtype, device=x.device)
     for i in range(output.shape[2]):  # Hout
-        for j in range(output.shape[3]):  # # Wout
+        for j in range(output.shape[3]):  # Wout
             h_start, w_start = i * stride, j * stride
             h_pos, w_pos = slice(h_start, (h_start + kernel_size)), \
                            slice(w_start, (w_start + kernel_size))
 
             output[:, :, i, j] = torch.sum(
                 # N, Cout, Cin, KH, KW
-                x[:, None, :, h_pos, w_pos] * weight[None, :, :, :, :], dim=(-3, -2, -1)) \
-                                 + (bias if bias is not None else 0)
-    return output
+                x[:, None, :, h_pos, w_pos] * weight[None, :, :, :, :], dim=(-3, -2, -1))
+
+    return output + (bias[:, None, None] if bias is not None else 0)  # 后对齐
+
+
+def _conv2d_2(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, padding: int = 0) -> Tensor:
+    """2d卷积(F.conv2d()). 版本2 - 比版本1快10倍
+
+    :param x: shape = (N, Cin, Hin, Win)
+    :param weight: shape = (Cout, Cin, KH, KW)
+    :param bias: shape = (Cout,)
+    :param stride: int
+    :param padding: int
+    :return: shape = (N, Cout, Hout, Wout)
+    """
+    if padding:
+        x = _zero_padding2d(x, padding)
+    kernel_size = weight.shape[-2]
+    # Out = (In + 2*P − K) // S + 1
+    output_h, output_w = (x.shape[2] - kernel_size) // stride + 1, \
+                         (x.shape[3] - kernel_size) // stride + 1
+    output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
+                         dtype=x.dtype, device=x.device)
+    weight = weight.view(weight.shape[0], -1)
+    for i in range(output.shape[2]):  # Hout
+        for j in range(output.shape[3]):  # Wout
+            h_start, w_start = i * stride, j * stride
+            h_pos, w_pos = slice(h_start, (h_start + kernel_size)), \
+                           slice(w_start, (w_start + kernel_size))
+            data = x[:, :, h_pos, w_pos].contiguous().view(x.shape[0], -1, 1)
+            output[:, :, i, j] = (weight @ data)[:, :, 0]  # e.g. [128, 576] @ [N, 576, 1] -> [N, 128, 1]
+    return output + (bias[:, None, None] if bias is not None else 0)  # 后对齐
+
+
+# x = torch.randn(8, 64, 24, 40)
+# weight = torch.randn(128, 64, 3, 3)
+# bias = torch.randn(128)
+# import time
+# t = time.time()
+# y1 = _conv2d(x, weight, bias, 1, 1)
+# print(time.time() - t)  # 3.287348508834839
+# t = time.time()
+# y2 = _conv2d_2(x, weight, bias, 1, 1)
+# print(time.time() - t)  # 0.16396212577819824
+# t = time.time()
+# y3 = F.conv2d(x, weight, bias, 1, 1)
+# print(time.time() - t)  # 0.011989116668701172
+# print(torch.all(torch.abs(y1 - y3) < 1e-3))  # tensor(True)
+# print(torch.all(torch.abs(y2 - y3) < 1e-3))  # tensor(True)
 
 
 def _conv_transpose2d(x: Tensor, weight: Tensor, bias: Tensor = None,
@@ -587,6 +633,7 @@ def __rnn_tanh(x: Tensor, hx: Tensor, params: List[Tensor], has_biases: bool, nu
             x = F.dropout(x, dropout, train)
     hy = torch.stack(hy)
     return x, hy
+
 
 # x = torch.randn(5, 3, 10)  # (L, N, In)
 # hx = torch.randn(4, 3, 20)  # (NL, N, Out)
