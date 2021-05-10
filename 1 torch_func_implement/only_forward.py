@@ -94,15 +94,24 @@ def _binary_cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
                       torch.clamp_max(-torch.log(1 - pred), 100) * (1 - target))
 
 
-def _binary_cross_entropy_with_logits(pred: Tensor, target: Tensor) -> Tensor:
+def _binary_cross_entropy_with_logits(pred: Tensor, target: Tensor, pos_weight: Tensor = None) -> Tensor:
     """二元交叉熵损失(F.binary_cross_entropy_with_logits()). 未过sigmoid
 
     :param pred: shape = (N,)
     :param target: shape = (N,) torch.float32
+    :param pos_weight: 正样本的权重. shape = () or num_classes. e.g. shape[20]
     :return: shape = ()"""
-
+    pos_weight = 1. if pos_weight is None else pos_weight
     # F.logsigmoid(- pred)) 即 F.log(1 - F.sigmoid(y_pred))
-    return torch.mean(-F.logsigmoid(pred) * target + -F.logsigmoid(-pred) * (1 - target))
+    return torch.mean(-F.logsigmoid(pred) * target * pos_weight + -F.logsigmoid(-pred) * (1 - target))
+
+
+# pred = torch.rand(100, 20)
+# target = torch.rand(100, 20)
+# print(F.binary_cross_entropy_with_logits(pred, target))
+# print(F.binary_cross_entropy_with_logits(pred, target, pos_weight=torch.tensor(0.2)))
+# print(_binary_cross_entropy_with_logits(pred, target))
+# print(_binary_cross_entropy_with_logits(pred, target, pos_weight=torch.tensor(0.2)))
 
 
 def _mse_loss(pred: Tensor, target: Tensor) -> Tensor:
@@ -347,7 +356,7 @@ def _conv2d_2(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, p
             h_pos, w_pos = slice(h_start, (h_start + kernel_size)), \
                            slice(w_start, (w_start + kernel_size))
             data = x[:, :, h_pos, w_pos].contiguous().view(x.shape[0], -1, 1)
-            output[:, :, i, j] = (weight @ data)[:, :, 0]  # e.g. [128, 576] @ [N, 576, 1] -> [N, 128, 1]
+            output[:, :, i, j] = (weight @ data)[:, :, 0]  # e.g. [Cout, Cin*KH*KW] @ [N, Cin*KH*KW, 1] -> [N, Cout, 1]
     return output + (bias[:, None, None] if bias is not None else 0)  # 后对齐
 
 
