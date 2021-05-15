@@ -301,7 +301,7 @@ def _linear(x: Tensor, weight: Tensor, bias: Tensor = None) -> Tensor:
 
 
 def _conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, padding: int = 0) -> Tensor:
-    """2d卷积(F.conv2d())
+    """2d卷积(F.conv2d()). 点乘
 
     :param x: shape = (N, Cin, Hin, Win)
     :param weight: shape = (Cout, Cin, KH, KW)
@@ -332,7 +332,7 @@ def _conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, pad
 
 
 def _conv2d_2(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, padding: int = 0) -> Tensor:
-    """2d卷积(F.conv2d()). 版本2 - 比版本1快10倍
+    """2d卷积(F.conv2d()). 矩阵乘
 
     :param x: shape = (N, Cin, Hin, Win)
     :param weight: shape = (Cout, Cin, KH, KW)
@@ -356,10 +356,12 @@ def _conv2d_2(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, p
             h_pos, w_pos = slice(h_start, (h_start + kernel_size)), \
                            slice(w_start, (w_start + kernel_size))
             data = x[:, :, h_pos, w_pos].contiguous().view(x.shape[0], -1, 1)
-            output[:, :, i, j] = (weight @ data)[:, :, 0]  # e.g. [Cout, Cin*KH*KW] @ [N, Cin*KH*KW, 1] -> [N, Cout, 1]
+            # e.g. [Cout, Cin*KH*KW] @ [N, Cin*KH*KW, 1] -> [N, Cout, 1]
+            output[:, :, i, j] = (weight @ data)[:, :, 0]
     return output + (bias[:, None, None] if bias is not None else 0)  # 后对齐
 
 
+# 为啥那么慢...我也不知道...
 # x = torch.randn(8, 64, 24, 40)
 # weight = torch.randn(128, 64, 3, 3)
 # bias = torch.randn(128)
@@ -373,6 +375,104 @@ def _conv2d_2(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, p
 # t = time.time()
 # y3 = F.conv2d(x, weight, bias, 1, 1)
 # print(time.time() - t)  # 0.011989116668701172
+# print(torch.all(torch.abs(y1 - y3) < 1e-3))  # tensor(True)
+# print(torch.all(torch.abs(y2 - y3) < 1e-3))  # tensor(True)
+
+
+def __conv2d(x: Tensor, weight: Tensor, bias: Tensor = None,
+             stride: int = 1, padding: int = 0,
+             dilation: int = 1, groups: int = 1) -> Tensor:
+    """2d卷积(F.conv2d()) - 复杂版. 点乘
+
+    :param x: shape = (N, Cin, Hin, Win)
+    :param weight: shape = (groups * G_Cout, G_Cin, KH, KW).  假设KH=KW
+    :param bias: shape = (Cout,)
+    :param stride: int
+    :param padding: int
+    :param dilation: int. 膨胀卷积 / 空洞卷积
+    :param groups: int. 分组卷积
+    :return: shape = (N, Cout, Hout, Wout).
+    """
+
+    if padding:
+        x = _zero_padding2d(x, padding)
+    kernel_size = dilation * (weight.shape[-2] - 1) + 1
+
+    # O = (I + 2*P - (D*(K-1)+1)) // S + 1
+    output_h, output_w = (x.shape[2] - kernel_size) // stride + 1, \
+                         (x.shape[3] - kernel_size) // stride + 1
+    output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
+                         dtype=x.dtype, device=x.device)
+    for g in range(groups):
+        g_cout, g_cin = weight.shape[0] // groups, weight.shape[1]
+        cin_pos = slice(g_cin * g, g_cin * (g + 1))
+        cout_pos = slice(g_cout * g, g_cout * (g + 1))
+        for i in range(output.shape[2]):  # Hout
+            for j in range(output.shape[3]):  # # Wout
+                h_start, w_start = i * stride, j * stride
+                h_pos, w_pos = slice(h_start, (h_start + kernel_size), dilation), \
+                               slice(w_start, (w_start + kernel_size), dilation)
+                output[:, cout_pos, i, j] = torch.sum(
+                    # N, G_Cout, G_Cin, KH, KW
+                    x[:, None, cin_pos, h_pos, w_pos] * weight[None, cout_pos, :, :, :], dim=(-3, -2, -1))
+
+    return output + (bias[:, None, None] if bias is not None else 0)  # 后对齐
+
+
+def __conv2d_2(x: Tensor, weight: Tensor, bias: Tensor = None,
+               stride: int = 1, padding: int = 0,
+               dilation: int = 1, groups: int = 1) -> Tensor:
+    """2d卷积(F.conv2d()) - 复杂版. 矩阵乘
+
+    :param x: shape = (N, Cin, Hin, Win)
+    :param weight: shape = (groups * G_Cout, G_Cin, KH, KW).  假设KH=KW
+    :param bias: shape = (Cout,)
+    :param stride: int
+    :param padding: int
+    :param dilation: int. 膨胀卷积 / 空洞卷积
+    :param groups: int. 分组卷积
+    :return: shape = (N, Cout, Hout, Wout).
+    """
+
+    if padding:
+        x = _zero_padding2d(x, padding)
+    kernel_size = dilation * (weight.shape[-2] - 1) + 1
+
+    # O = (I + 2*P - (D*(K-1)+1)) // S + 1
+    output_h, output_w = (x.shape[2] - kernel_size) // stride + 1, \
+                         (x.shape[3] - kernel_size) // stride + 1
+    output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
+                         dtype=x.dtype, device=x.device)
+    g_cout, g_cin = weight.shape[0] // groups, weight.shape[1]
+    weight = weight.view(weight.shape[0], -1)
+    for g in range(groups):
+        cin_pos = slice(g_cin * g, g_cin * (g + 1))
+        cout_pos = slice(g_cout * g, g_cout * (g + 1))
+        for i in range(output.shape[2]):  # Hout
+            for j in range(output.shape[3]):  # # Wout
+                h_start, w_start = i * stride, j * stride
+                h_pos, w_pos = slice(h_start, (h_start + kernel_size), dilation), \
+                               slice(w_start, (w_start + kernel_size), dilation)
+                data = x[:, cin_pos, h_pos, w_pos].contiguous().view(x.shape[0], -1, 1)
+                # e.g. [G_Cout, G_Cin*KH*KW] @ [N, G_Cin*KH*KW, 1] -> [N, G_Cout, 1]
+                output[:, cout_pos, i, j] = (weight[cout_pos] @ data)[:, :, 0]
+
+    return output + (bias[:, None, None] if bias is not None else 0)  # 后对齐
+
+
+# x = torch.randn(8, 64, 24, 40)
+# weight = torch.randn(128, 16, 3, 3)
+# bias = torch.randn(128)
+# import time
+# t = time.time()
+# y1 = __conv2d(x, weight, bias, 1, 1, 2, 4)
+# print(time.time() - t)  # 1.5747883319854736
+# t = time.time()
+# y2 = __conv2d_2(x, weight, bias, 1, 1, 2, 4)
+# print(time.time() - t)  # 0.2872316837310791
+# t = time.time()
+# y3 = F.conv2d(x, weight, bias, 1, 1, 2, 4)
+# print(time.time() - t)  # 0.002991914749145508
 # print(torch.all(torch.abs(y1 - y3) < 1e-3))  # tensor(True)
 # print(torch.all(torch.abs(y2 - y3) < 1e-3))  # tensor(True)
 
@@ -405,47 +505,6 @@ def _conv_transpose2d(x: Tensor, weight: Tensor, bias: Tensor = None,
     if bias is not None:
         output += bias[:, None, None]
     return output if padding == 0 else output[:, :, padding:-padding, padding:-padding]
-
-
-def __conv2d(x: Tensor, weight: Tensor, bias: Tensor = None,
-             stride: int = 1, padding: int = 0,
-             dilation: int = 1, groups: int = 1) -> Tensor:
-    """2d卷积(F.conv2d()) - 复杂版
-
-    :param x: shape = (N, Cin, Hin, Win)
-    :param weight: shape = (groups * G_Cout, G_Cin, KH, KW).  假设KH=KW
-    :param bias: shape = (Cout,)
-    :param stride: int
-    :param padding: int
-    :param dilation: int. 膨胀卷积 / 空洞卷积
-    :param groups: int. 分组卷积
-    :return: shape = (N, Cout, Hout, Wout).
-    """
-
-    if padding:
-        x = _zero_padding2d(x, padding)
-    kernel_size = dilation * (weight.shape[-2] - 1) + 1
-
-    # O = (I + 2*P - (D*(K-1)+1)) // S + 1
-    output_h, output_w = (x.shape[2] - kernel_size) // stride + 1, \
-                         (x.shape[3] - kernel_size) // stride + 1
-    output = torch.empty((x.shape[0], weight.shape[0], output_h, output_w),
-                         dtype=x.dtype, device=x.device)
-    for g in range(groups):
-        g_cout, g_cin = weight.shape[0] // groups, weight.shape[1]
-        cin_pos = slice(g_cin * g, g_cin * (g + 1))
-        cout_pos = slice(g_cout * g, g_cout * (g + 1))
-        for i in range(output.shape[2]):  # Hout
-            for j in range(output.shape[3]):  # # Wout
-                h_start, w_start = i * stride, j * stride
-                h_pos, w_pos = slice(h_start, (h_start + kernel_size), dilation), \
-                               slice(w_start, (w_start + kernel_size), dilation)
-                output[:, cout_pos, i, j] = torch.sum(
-                    # N, G_Cout, G_Cin, KH, KW
-                    x[:, None, cin_pos, h_pos, w_pos] * weight[None, cout_pos, :, :, :], dim=(-3, -2, -1)) \
-                                            + (bias[cout_pos] if bias is not None else 0)
-
-    return output
 
 
 def _nearest_interpolate(x: Tensor, size: Tuple[int, int] = None, scale_factor: float = None) -> Tensor:
