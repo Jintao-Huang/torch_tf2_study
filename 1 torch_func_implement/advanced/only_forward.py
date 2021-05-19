@@ -3,10 +3,13 @@
 
 import torch
 from torch import Tensor
+from torch.nn import Parameter
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops.boxes import box_area, box_iou
 import numpy as np
+from torch.nn.init import xavier_uniform_, constant_
+import math
 
 
 # ------------------------------------ activation
@@ -72,6 +75,16 @@ def label_smoothing_cross_entropy(pred: Tensor, target: Tensor, smoothing: float
 # print(torch.sum(target * -torch.log(torch.softmax(pred, -1))))
 # print(torch.sum(target_s * -torch.log(torch.softmax(pred, -1))))
 # print(label_smoothing_cross_entropy(pred, torch.tensor([0]), 0.1))
+# ------------------------------------------
+# for x in np.linspace(0, 10, 100):
+#     pred = torch.tensor([[x, 0., 0., 0., 0., 0., 0.]])
+#     pred_prob = torch.softmax(pred, -1)
+#     # target_s = torch.tensor([[0.9 + 1 / 30, 1 / 30, 1 / 30]])
+#     # target = torch.tensor([[1, 0., 0.]])
+#     print(x, pred_prob[0, 0].item(),
+#           F.cross_entropy(pred, torch.tensor([0])).item(),
+#           label_smoothing_cross_entropy(pred, torch.tensor([0])).item(),
+#           label_smoothing_cross_entropy(pred, torch.tensor([0]), 0.01).item())
 
 
 def binary_focal_loss_with_digits(
@@ -277,6 +290,283 @@ def box_ciou(boxes1, boxes2):
     # diou = iou - dist2_center / dist2_outer
     ciou = iou - dist2_center / dist2_outer - alpha * v  # [X]
     return ciou
+
+
+# ------------------------------------ transformer
+
+
+def _multi_head_attention_forward(
+        query, key, value,
+        num_heads,
+        in_proj_weight, in_proj_bias,
+        dropout_p,
+        out_proj_weight, out_proj_bias,
+        training=True,
+        key_padding_mask=None,
+        need_weights=True,
+        attn_mask=None,
+):
+    """
+
+    :param query: shape[TL, N, E]
+    :param key: shape[SL, N, E]
+    :param value: shape[SL, N, E]
+    :param num_heads: int
+    :param in_proj_weight: shape[3*E, E]
+    :param in_proj_bias: shape[3*E]
+    :param dropout_p: float
+    :param out_proj_weight: shape[E, E]
+    :param out_proj_bias: shape[E]
+    :param training: bool
+    :param key_padding_mask: shape[N, SL]
+    :param need_weights: bool
+    :param attn_mask: shape[TL, SL]
+    :return: Tuple[output: shape[TL, N, E], output_weight: shape[N, TL, SL]]
+    """
+
+    tgt_len, batch_size, embed_dim = query.shape
+    src_len = key.shape[0]
+    head_dim = embed_dim // num_heads  # 需要可以被整除, 此处不进行检查
+    if query is key and key is value:
+        query, key, value = \
+            F.linear(query, in_proj_weight, in_proj_bias).chunk(3, -1)
+    elif key is value:
+        query = F.linear(query, in_proj_weight[0:embed_dim], in_proj_bias[0:embed_dim])
+        key, value = F.linear(key, in_proj_weight[embed_dim:], in_proj_bias[embed_dim:]).chunk(2, -1)
+    else:
+        # shape[TL, N, E], shape[SL, N, E], shape[SL, N, E]
+        query = F.linear(query, in_proj_weight[0:embed_dim], in_proj_bias[0:embed_dim])
+        key = F.linear(key, in_proj_weight[embed_dim:2 * embed_dim], in_proj_bias[embed_dim:2 * embed_dim])
+        value = F.linear(value, in_proj_weight[2 * embed_dim:], in_proj_bias[2 * embed_dim:])
+    # shape[N * NH, TL, HD], shape[N * NH, SL, HD], shape[N * NH, SL, HD]
+    query = query.contiguous().view(tgt_len, batch_size * num_heads, head_dim).transpose(0, 1)
+    key = key.contiguous().view(src_len, batch_size * num_heads, head_dim).transpose(0, 1)
+    value = value.contiguous().view(src_len, batch_size * num_heads, head_dim).transpose(0, 1)
+    scale = 1 / math.sqrt(head_dim)
+    query = query * scale
+    # shape[N * NH, TL, SL]. the weights on the values
+    attn_output_weights = query @ key.transpose(1, 2)
+    if attn_mask is not None:  # TL, SL位置上. decoder层面. [TL, SL] or [N * NH, TL, SL]
+        attn_output_weights.masked_fill_(attn_mask, float("-inf"))
+    if key_padding_mask is not None:  # key上. 任务层面
+        # shape[N, NH, TL, SL]
+        attn_output_weights = attn_output_weights.view(batch_size, num_heads, tgt_len, src_len)
+        attn_output_weights = attn_output_weights.masked_fill(
+            key_padding_mask[:, None, None, :],  # [N, 1, 1, SL]
+            float("-inf"),
+        )
+        # shape[N * NH, TL, SL]
+        attn_output_weights = attn_output_weights.view(batch_size * num_heads, tgt_len, src_len)
+
+    attn_output_weights = F.softmax(attn_output_weights, dim=-1)
+    attn_output_weights = F.dropout(attn_output_weights, dropout_p, training)
+    # shape[N * NH, TL, HD].
+    attn_output = attn_output_weights @ value  # [N * NH, TL, SL] @ [N * NH, SL, HD]
+    # shape[TL, N, E]
+    attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, batch_size, embed_dim)
+    attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)  # 此处已Concat. 直接全连接
+    if need_weights:
+        # [N, NH, TL, SL]
+        attn_output_weights = attn_output_weights.view(batch_size, num_heads, tgt_len, src_len)
+        # [N, TL, SL]
+        attn_output_weights = torch.mean(attn_output_weights, 1)
+        return attn_output, attn_output_weights
+    else:
+        return attn_output, None
+
+
+class _MultiheadAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads, dropout=0., bias=True):
+        super(_MultiheadAttention, self).__init__()
+        self.num_heads = num_heads
+        self.dropout = dropout
+        self.in_proj_weight = Parameter(torch.empty(3 * embed_dim, embed_dim))
+        self.in_proj_bias = Parameter(torch.empty(3 * embed_dim)) if bias else None
+        self.out_proj = nn.Linear(embed_dim, embed_dim, True)
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        xavier_uniform_(self.in_proj_weight)
+        constant_(self.in_proj_bias, 0.)
+        # out_proj.weight用默认
+        constant_(self.out_proj.bias, 0.)
+
+    def forward(self, query, key, value,
+                key_padding_mask=None,
+                need_weights=True, attn_mask=None):
+        """
+
+        :param query: shape[TL, N, E]
+        :param key: shape[SL, N, E]
+        :param value: shape[SL, N, E]
+        :param key_padding_mask: shape[N, SL]
+        :param need_weights: bool
+        :param attn_mask: shape[TL, SL]
+        :return: Tuple[output: shape[TL, N, E], output_weight: shape[N, TL, SL]]
+        """
+        return _multi_head_attention_forward(
+            query, key, value, self.num_heads,
+            self.in_proj_weight, self.in_proj_bias,
+            self.dropout, self.out_proj.weight, self.out_proj.bias,
+            self.training, key_padding_mask, need_weights, attn_mask)
+
+
+class _TransformerEncoderLayer(nn.Module):
+    def __init__(self, d_model, num_heads, dim_feedforward=2048, dropout=0.1):
+        super(_TransformerEncoderLayer, self).__init__()
+        # sub_layer1
+        self.self_attn = _MultiheadAttention(d_model, num_heads, dropout, True)
+        self.dropout1 = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        # sub_layer2
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, dim_feedforward),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(dim_feedforward, d_model),
+        )
+        self.dropout2 = nn.Dropout(dropout)
+        self.norm2 = nn.LayerNorm(d_model)
+
+    def forward(self, src: Tensor, src_mask=None, src_key_padding_mask=None):
+        """
+
+        :param src: shape[SL, N, E]
+        :param src_mask: shape[SL, SL]
+        :param src_key_padding_mask: shape[N, SL]
+        :return: shape[SL, N, E]
+        """
+        # sub_layer1
+        src0 = src
+        src = self.self_attn(src, src, src, src_key_padding_mask, False, src_mask)[0]
+        src = src0 + self.dropout1(src)
+        src = self.norm1(src)
+        # sub_layer2
+        src0 = src
+        src = self.ffn(src)
+        src = src0 + self.dropout2(src)
+        src = self.norm2(src)
+        return src
+
+
+class _TransformerDecoderLayer(nn.Module):
+    def __init__(self, d_model, num_heads, dim_feedforward=2048, dropout=0.1):
+        super(_TransformerDecoderLayer, self).__init__()
+        # sub_layer1
+        self.self_attn = _MultiheadAttention(d_model, num_heads, dropout=dropout)
+        self.dropout1 = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        # sub_layer2
+        self.multihead_attn = _MultiheadAttention(d_model, num_heads, dropout=dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.norm2 = nn.LayerNorm(d_model)
+        # sub_layer3
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, dim_feedforward),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(dim_feedforward, d_model),
+        )
+        self.dropout3 = nn.Dropout(dropout)
+        self.norm3 = nn.LayerNorm(d_model)
+
+    def forward(self, tgt, memory,
+                tgt_mask=None, memory_mask=None,
+                tgt_key_padding_mask=None, memory_key_padding_mask=None):
+        """
+
+        :param tgt: shape[TL, N, E]. embedding + positional encoding
+        :param memory: shape[SL, N, E]. encoder的输出
+        :param tgt_mask: shape[TL, TL]
+        :param memory_mask: shape[TL, SL]
+        :param tgt_key_padding_mask: shape[N, TL]
+        :param memory_key_padding_mask: shape[N, SL]
+        :return: shape[TL, N, E]. 未过linear 和 softmax
+        """
+        # sub_layer1
+        tgt0 = tgt
+        tgt = self.self_attn(tgt, tgt, tgt, tgt_key_padding_mask, False, tgt_mask)[0]
+        tgt = tgt0 + self.dropout1(tgt)
+        tgt = self.norm1(tgt)
+        # sub_layer2
+        tgt0 = tgt
+        tgt = self.multihead_attn(tgt, memory, memory, memory_key_padding_mask, False, memory_mask)[0]
+        tgt = tgt0 + self.dropout2(tgt)
+        tgt = self.norm2(tgt)
+        # sub_layer3
+        tgt0 = tgt
+        tgt = self.ffn(tgt)
+        tgt = tgt0 + self.dropout3(tgt)
+        tgt = self.norm3(tgt)
+        return tgt
+
+
+class _Transformer(nn.Module):
+    def __init__(self, d_model=512, num_heads=8,
+                 num_encoder_layers=6, num_decoder_layers=6,
+                 dim_feedforward=2048, dropout=0.1):
+        super(_Transformer, self).__init__()
+        self.num_encoder_layers = num_encoder_layers
+        self.num_decoder_layers = num_decoder_layers
+        self.encoder_list = nn.ModuleList([
+            _TransformerEncoderLayer(d_model, num_heads, dim_feedforward, dropout)
+            for _ in range(num_encoder_layers)
+        ])
+        self.norm1 = nn.LayerNorm(d_model)
+        self.decoder_list = nn.ModuleList([
+            _TransformerDecoderLayer(d_model, num_heads, dim_feedforward, dropout)
+            for _ in range(num_decoder_layers)
+        ])
+        self.norm2 = nn.LayerNorm(d_model)
+
+    def forward(self, src, tgt,
+                src_mask=None, tgt_mask=None,
+                memory_mask=None, src_key_padding_mask=None,
+                tgt_key_padding_mask=None, memory_key_padding_mask=None):
+        """
+
+        :param src: shape[SL, N, E]
+        :param tgt: shape[TL, N, E]
+        :param src_mask: shape[SL, SL]
+        :param tgt_mask: shape[TL, TL]
+        :param memory_mask: shape[TL, SL]
+        :param src_key_padding_mask: shape[N, SL]
+        :param tgt_key_padding_mask: shape[N, TL]
+        :param memory_key_padding_mask: shape[N, SL]
+        :return: shape[TL, N, E]. 未过linear 和 softmax
+        """
+        # encoder
+        for i in range(self.num_encoder_layers):
+            src = self.encoder_list[i](src, src_mask, src_key_padding_mask)
+        memory = self.norm1(src)
+        del src
+        # decoder
+        for i in range(self.num_encoder_layers):
+            tgt = self.decoder_list[i](tgt, memory, tgt_mask, memory_mask,
+                                       tgt_key_padding_mask, memory_key_padding_mask)
+        tgt = self.norm2(tgt)
+        return tgt
+
+
+# torch.manual_seed(0)
+# m0 = nn.Transformer()
+# m1 = _Transformer()
+# torch.manual_seed(0)
+# src = torch.rand(10, 16, 512)
+# tgt = torch.rand(20, 16, 512)
+# src_mask = (torch.rand(10, 10) * 1.1).floor().bool()
+# tgt_mask = (torch.rand(20, 20) * 1.1).floor().bool()
+# memory_mask = (torch.rand(20, 10) * 1.1).floor().bool()
+# src_key_padding_mask = (torch.rand(16, 10) * 1.1).floor().bool()
+# tgt_key_padding_mask = (torch.rand(16, 20) * 1.1).floor().bool()
+# memory_key_padding_mask = (torch.rand(16, 10) * 1.1).floor().bool()
+# # 注意这里的结果不同，因为参数初始化(顺序)和dropout
+# y0 = m0(src, tgt, src_mask, tgt_mask, memory_mask,
+#         src_key_padding_mask, tgt_key_padding_mask, memory_key_padding_mask)
+# y1 = m1(src, tgt, src_mask, tgt_mask, memory_mask,
+#         src_key_padding_mask, tgt_key_padding_mask, memory_key_padding_mask)
+# print(y0)
+# print(y1)
 
 
 # ------------------------------------ reuse

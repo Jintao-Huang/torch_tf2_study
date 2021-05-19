@@ -137,7 +137,7 @@ def _smooth_l1_loss(pred: Tensor, target: Tensor, beta: float = 1.) -> Tensor:
 
 
 # --------------------------------------------------- layers
-def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Tensor, bias: Tensor,
+def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Tensor = None, bias: Tensor = None,
                 training: bool = False, momentum: float = 0.1, eps: float = 1e-5) -> Tensor:
     """BN(F.batch_norm()). 对NHW做归一化.
 
@@ -161,8 +161,8 @@ def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Te
         mean = eval_mean = torch.mean(x, _dim)  # 总体 = 估计. shape = (In,) or (C,)
         eval_var = torch.var(x, _dim, unbiased=True)  # 无偏估计, x作为样本
         var = torch.var(x, _dim, unbiased=False)  # 用于标准化, x作为总体
-        running_mean[:] = (1 - momentum) * running_mean + momentum * eval_mean
-        running_var[:] = (1 - momentum) * running_var + momentum * eval_var  # 无偏估计
+        running_mean.data = (1 - momentum) * running_mean + momentum * eval_mean
+        running_var.data = (1 - momentum) * running_var + momentum * eval_var  # 无偏估计
     else:
         mean = running_mean
         var = running_var
@@ -171,11 +171,51 @@ def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Te
     if x.dim() == 4:  # 扩维
         mean, var = mean[:, None, None], var[:, None, None]
         weight, bias = weight[:, None, None], bias[:, None, None]
-    return (x - mean) * torch.rsqrt(var + eps) * weight + bias
+    return (x - mean) * torch.rsqrt(var + eps) \
+           * (weight if weight is not None else 1.) + (bias if bias is not None else 0.)
     # or: 以下为torch中源码实现方式
     # scale = weight * torch.rsqrt(var + eps)
     # bias = bias - mean * scale
     # return x * scale + bias
+
+
+# x = torch.rand(2, 20, 7, 7)
+# running_mean = torch.rand(20)
+# running_var = torch.rand(20)
+# weight = torch.randn(20)
+# bias = torch.randn(20)
+# print(F.batch_norm(x, running_mean, running_var, weight, bias, True, 0.1, 1e-5))
+# print(_batch_norm(x, running_mean, running_var, weight, bias, True, 0.1, 1e-5))
+
+
+def _layer_norm(x, normalized_shape, weight=None, bias=None, eps=1e-5):
+    """BN(F.layer_norm()). 对NHW做归一化.
+
+    :param x: shape = (N, *)
+    :param normalized_shape:
+    :param weight: shape = (*)
+    :param bias: shape = (*)
+    :param eps:
+    :return: shape = x.shape"""
+
+    _dim = list(range(x.dim() - len(normalized_shape), x.dim()))  # 最后维度对齐
+
+    mean = torch.mean(x, _dim, keepdim=True)  # 总体 = 估计. shape = (In,) or (C,)
+    var = torch.var(x, _dim, unbiased=False, keepdim=True)  # 用于标准化, x作为总体,
+
+    return (x - mean) * torch.rsqrt(var + eps) \
+           * (weight if weight is not None else 1.) + (bias if bias is not None else 0.)
+
+
+# import torch.nn as nn
+# x = torch.randn(16, 40, 20)
+# layer = nn.LayerNorm(20, 1e-5, True)
+# weight, bias, eps, normalized_shape = layer.weight, layer.bias, layer.eps, layer.normalized_shape
+# y1 = layer(x)
+# y2 = F.layer_norm(x, normalized_shape, weight, bias, eps)
+# y3 = _layer_norm(x, normalized_shape, weight, bias, eps)
+# print(torch.all(torch.abs(y1 - y3) < 1e-5))  # tensor(True)
+# print(torch.all(torch.abs(y2 - y3) < 1e-5))  # tensor(True)
 
 
 def _dropout(x: Tensor, drop_p: float, training: bool) -> Tensor:
@@ -297,8 +337,12 @@ def _linear(x: Tensor, weight: Tensor, bias: Tensor = None) -> Tensor:
     :param bias: shape = (Out,)
     :return: shape = (N, Out)"""
 
-    return x @ weight.t() + bias if bias is not None else 0.
+    return x @ weight.t() + (bias if bias is not None else 0.)
 
+
+# x = torch.randn(10, 20)
+# w = torch.randn(30, 20)
+# print(_linear(x, w))
 
 def _conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: int = 1, padding: int = 0) -> Tensor:
     """2d卷积(F.conv2d()). 点乘
