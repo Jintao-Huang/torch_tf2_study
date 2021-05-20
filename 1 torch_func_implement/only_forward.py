@@ -189,27 +189,28 @@ def _batch_norm(x: Tensor, running_mean: Tensor, running_var: Tensor, weight: Te
 
 
 def _layer_norm(x, normalized_shape, weight=None, bias=None, eps=1e-5):
-    """BN(F.layer_norm()). 对NHW做归一化.
+    """(F.layer_norm()).
 
-    :param x: shape = (N, *)
+    :param x: shape = (*, *normalized_shape)
     :param normalized_shape:
-    :param weight: shape = (*)
-    :param bias: shape = (*)
+    :param weight: shape = normalized_shape
+    :param bias: shape = normalized_shape
     :param eps:
     :return: shape = x.shape"""
 
-    _dim = list(range(x.dim() - len(normalized_shape), x.dim()))  # 最后维度对齐
+    _dim = list(range(x.dim() - len(normalized_shape), x.dim()))  # 与最后维度对齐
 
-    mean = torch.mean(x, _dim, keepdim=True)  # 总体 = 估计. shape = (In,) or (C,)
-    var = torch.var(x, _dim, unbiased=False, keepdim=True)  # 用于标准化, x作为总体,
+    mean = torch.mean(x, _dim, keepdim=True)  # shape = [*, 后补1]. (keep_dim)
+    # x作为总体, 无需使用无偏估计. 注: 在BN中计算running_var需要使用无偏估计
+    var = torch.var(x, _dim, unbiased=False, keepdim=True)
 
     return (x - mean) * torch.rsqrt(var + eps) \
            * (weight if weight is not None else 1.) + (bias if bias is not None else 0.)
 
 
 # import torch.nn as nn
-# x = torch.randn(16, 40, 20)
-# layer = nn.LayerNorm(20, 1e-5, True)
+# x = torch.randn(16, 10, 512)
+# layer = nn.LayerNorm((10, 512), 1e-5, True)
 # weight, bias, eps, normalized_shape = layer.weight, layer.bias, layer.eps, layer.normalized_shape
 # y1 = layer(x)
 # y2 = F.layer_norm(x, normalized_shape, weight, bias, eps)
@@ -221,7 +222,7 @@ def _layer_norm(x, normalized_shape, weight=None, bias=None, eps=1e-5):
 def _dropout(x: Tensor, drop_p: float, training: bool) -> Tensor:
     """(F.dropout(inplace=False)).
 
-    :param x: shape = (N, In)
+    :param x: shape = (*)
     :param drop_p: float
     :param training: bool
     :return: shape = x.shape"""
@@ -229,9 +230,21 @@ def _dropout(x: Tensor, drop_p: float, training: bool) -> Tensor:
         return x
 
     keep_p = 1 - drop_p
-    keep_tensors = torch.floor(keep_p + torch.rand(x.shape, dtype=x.dtype, device=x.device))
+    keep_tensors = torch.floor(keep_p + torch.rand_like(x))
+    x = x * keep_tensors
+    return x / keep_p  # 保持均值不变
 
-    return x / keep_p * keep_tensors
+
+# import torch
+#
+# x = torch.randn(16, 10)
+# torch.manual_seed(0)
+# y1 = F.dropout(x, 0.1, True)
+# torch.manual_seed(0)
+# y2 = _dropout(x, 0.1, True)
+# 结果不同，不知为何
+# print(y1)
+# print(y2)
 
 
 def _zero_padding2d(x: Tensor, padding: int) -> Tensor:
@@ -833,3 +846,13 @@ def _gru_cell(x: Tensor, hx: Tensor, w_ih: Tensor, w_hh: Tensor,
         r * (hx @ w_hh[c_hide * 2:c_hide * 3].t() + (b_hh[c_hide * 2:c_hide * 3] if b_hh is not None else 0)))
     y = (1 - z) * n + z * hx  # hx_1
     return y
+
+
+def _embedding(x, weight):
+    """(F.embedding())
+
+    :param x: shape[*]
+    :param weight: shape[NV, E]. NV: num_vocab, E: embedding_dim
+    :return: shape[*, E]
+    """
+    return weight[x]
