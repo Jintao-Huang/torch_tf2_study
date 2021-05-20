@@ -293,103 +293,23 @@ def box_ciou(boxes1, boxes2):
 
 
 # ------------------------------------ transformer
-
-
-def _multi_head_attention_forward(
-        query, key, value,
-        num_heads,
-        in_proj_weight, in_proj_bias,
-        dropout_p,
-        out_proj_weight, out_proj_bias,
-        training=True,
-        key_padding_mask=None,
-        need_weights=True,
-        attn_mask=None,
-):
-    """
-
-    :param query: shape[TL, N, E]
-    :param key: shape[SL, N, E]
-    :param value: shape[SL, N, E]
-    :param num_heads: int
-    :param in_proj_weight: shape[3*E, E]
-    :param in_proj_bias: shape[3*E]
-    :param dropout_p: float
-    :param out_proj_weight: shape[E, E]
-    :param out_proj_bias: shape[E]
-    :param training: bool
-    :param key_padding_mask: shape[N, SL]
-    :param need_weights: bool
-    :param attn_mask: shape[TL, SL]
-    :return: Tuple[output: shape[TL, N, E], output_weight: shape[N, TL, SL]]
-    """
-
-    tgt_len, batch_size, embed_dim = query.shape
-    src_len = key.shape[0]
-    head_dim = embed_dim // num_heads  # 需要可以被整除, 此处不进行检查
-    if query is key and key is value:
-        query, key, value = \
-            F.linear(query, in_proj_weight, in_proj_bias).chunk(3, -1)
-    elif key is value:
-        query = F.linear(query, in_proj_weight[0:embed_dim], in_proj_bias[0:embed_dim])
-        key, value = F.linear(key, in_proj_weight[embed_dim:], in_proj_bias[embed_dim:]).chunk(2, -1)
-    else:
-        # shape[TL, N, E], shape[SL, N, E], shape[SL, N, E]
-        query = F.linear(query, in_proj_weight[0:embed_dim], in_proj_bias[0:embed_dim])
-        key = F.linear(key, in_proj_weight[embed_dim:2 * embed_dim], in_proj_bias[embed_dim:2 * embed_dim])
-        value = F.linear(value, in_proj_weight[2 * embed_dim:], in_proj_bias[2 * embed_dim:])
-    # shape[N * NH, TL, HD], shape[N * NH, SL, HD], shape[N * NH, SL, HD]
-    query = query.contiguous().view(tgt_len, batch_size * num_heads, head_dim).transpose(0, 1)
-    key = key.contiguous().view(src_len, batch_size * num_heads, head_dim).transpose(0, 1)
-    value = value.contiguous().view(src_len, batch_size * num_heads, head_dim).transpose(0, 1)
-    scale = 1 / math.sqrt(head_dim)
-    query = query * scale
-    # shape[N * NH, TL, SL]. the weights on the values
-    attn_output_weights = query @ key.transpose(1, 2)
-    if attn_mask is not None:  # TL, SL位置上. decoder层面. [TL, SL] or [N * NH, TL, SL]
-        attn_output_weights.masked_fill_(attn_mask, float("-inf"))
-    if key_padding_mask is not None:  # key上. 任务层面
-        # shape[N, NH, TL, SL]
-        attn_output_weights = attn_output_weights.view(batch_size, num_heads, tgt_len, src_len)
-        attn_output_weights = attn_output_weights.masked_fill(
-            key_padding_mask[:, None, None, :],  # [N, 1, 1, SL]
-            float("-inf"),
-        )
-        # shape[N * NH, TL, SL]
-        attn_output_weights = attn_output_weights.view(batch_size * num_heads, tgt_len, src_len)
-
-    attn_output_weights = F.softmax(attn_output_weights, dim=-1)
-    attn_output_weights = F.dropout(attn_output_weights, dropout_p, training)
-    # shape[N * NH, TL, HD].
-    attn_output = attn_output_weights @ value  # [N * NH, TL, SL] @ [N * NH, SL, HD]
-    # shape[TL, N, E]
-    attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, batch_size, embed_dim)
-    attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)  # 此处已Concat. 直接全连接
-    if need_weights:
-        # [N, NH, TL, SL]
-        attn_output_weights = attn_output_weights.view(batch_size, num_heads, tgt_len, src_len)
-        # [N, TL, SL]
-        attn_output_weights = torch.mean(attn_output_weights, 1)
-        return attn_output, attn_output_weights
-    else:
-        return attn_output, None
-
-
+# 此处参考:
+# 1. torch.nn.Transformer
+# 2. https://arxiv.org/abs/1706.03762
+# 3. http://nlp.seas.harvard.edu/2018/04/03/attention.html
+# 为了避免与torch.nn中的函数或类混淆，自己复现的函数或类前加上`_`做区分
 class _MultiheadAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads, dropout=0., bias=True):
+    def __init__(self, embed_dim, num_heads, dropout_p):
         super(_MultiheadAttention, self).__init__()
         self.num_heads = num_heads
-        self.dropout = dropout
-        self.in_proj_weight = Parameter(torch.empty(3 * embed_dim, embed_dim))
-        self.in_proj_bias = Parameter(torch.empty(3 * embed_dim)) if bias else None
+        self.dropout_p = dropout_p
+        # project: 映射
+        self.in_proj_list = nn.ModuleList([
+            nn.Linear(embed_dim, embed_dim, True),  # query_proj
+            nn.Linear(embed_dim, embed_dim, True),  # key_proj
+            nn.Linear(embed_dim, embed_dim, True)  # value_proj
+        ])
         self.out_proj = nn.Linear(embed_dim, embed_dim, True)
-        self._reset_parameters()
-
-    def _reset_parameters(self):
-        xavier_uniform_(self.in_proj_weight)
-        constant_(self.in_proj_bias, 0.)
-        # out_proj.weight用默认
-        constant_(self.out_proj.bias, 0.)
 
     def forward(self, query, key, value,
                 key_padding_mask=None,
@@ -404,28 +324,66 @@ class _MultiheadAttention(nn.Module):
         :param attn_mask: shape[TL, SL]
         :return: Tuple[output: shape[TL, N, E], output_weight: shape[N, TL, SL]]
         """
-        return _multi_head_attention_forward(
-            query, key, value, self.num_heads,
-            self.in_proj_weight, self.in_proj_bias,
-            self.dropout, self.out_proj.weight, self.out_proj.bias,
-            self.training, key_padding_mask, need_weights, attn_mask)
+        num_heads = self.num_heads
+        dropout_p = self.dropout_p
+        training = self.training
+        tgt_len, batch_size, embed_dim = query.shape
+        src_len = key.shape[0]
+        head_dim = embed_dim // num_heads  # 需要可以被整除, 此处不进行检查
+        # shape[TL, N, E], shape[SL, N, E], shape[SL, N, E]
+        query, key, value = self.in_proj_list[0](query), self.in_proj_list[1](key), self.in_proj_list[2](value)
+        # shape[N * NH, TL, HD], shape[N * NH, SL, HD], shape[N * NH, SL, HD]
+        query = query.contiguous().view(tgt_len, batch_size * num_heads, head_dim).transpose(0, 1)
+        key = key.contiguous().view(src_len, batch_size * num_heads, head_dim).transpose(0, 1)
+        value = value.contiguous().view(src_len, batch_size * num_heads, head_dim).transpose(0, 1)
+        scale = 1 / math.sqrt(head_dim)
+        query = query * scale
+        # shape[N * NH, TL, SL]. the weights on the values
+        attn_output_weights = query @ key.transpose(1, 2)
+        if attn_mask is not None:  # TL, SL位置上. decoder层面. [TL, SL] or [N * NH, TL, SL]
+            attn_output_weights.masked_fill_(attn_mask, float("-inf"))
+        if key_padding_mask is not None:  # key上. 任务层面
+            # shape[N, NH, TL, SL]
+            attn_output_weights = attn_output_weights.view(batch_size, num_heads, tgt_len, src_len)
+            attn_output_weights = attn_output_weights.masked_fill(
+                key_padding_mask[:, None, None, :],  # [N, 1, 1, SL]
+                float("-inf"),
+            )
+            # shape[N * NH, TL, SL]
+            attn_output_weights = attn_output_weights.view(batch_size * num_heads, tgt_len, src_len)
+
+        attn_output_weights = F.softmax(attn_output_weights, dim=-1)
+        attn_output_weights = F.dropout(attn_output_weights, dropout_p, training)
+        # shape[N * NH, TL, HD].
+        attn_output = attn_output_weights @ value  # [N * NH, TL, SL] @ [N * NH, SL, HD]
+        # shape[TL, N, E]
+        attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, batch_size, embed_dim)
+        attn_output = self.out_proj(attn_output)  # 此处已Concat. 直接全连接
+        if need_weights:
+            # [N, NH, TL, SL]
+            attn_output_weights = attn_output_weights.view(batch_size, num_heads, tgt_len, src_len)
+            # [N, TL, SL]
+            attn_output_weights = torch.mean(attn_output_weights, 1)
+            return attn_output, attn_output_weights
+        else:
+            return attn_output, None
 
 
 class _TransformerEncoderLayer(nn.Module):
-    def __init__(self, d_model, num_heads, dim_feedforward=2048, dropout=0.1):
+    def __init__(self, d_model, num_heads, dim_feedforward=2048, dropout_p=0.1):
         super(_TransformerEncoderLayer, self).__init__()
         # sub_layer1
-        self.self_attn = _MultiheadAttention(d_model, num_heads, dropout, True)
-        self.dropout1 = nn.Dropout(dropout)
+        self.self_attn = _MultiheadAttention(d_model, num_heads, dropout_p)
+        self.dropout1 = nn.Dropout(dropout_p)
         self.norm1 = nn.LayerNorm(d_model)
         # sub_layer2
         self.ffn = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
+            nn.Dropout(dropout_p),
             nn.Linear(dim_feedforward, d_model),
         )
-        self.dropout2 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout_p)
         self.norm2 = nn.LayerNorm(d_model)
 
     def forward(self, src: Tensor, src_mask=None, src_key_padding_mask=None):
@@ -450,24 +408,24 @@ class _TransformerEncoderLayer(nn.Module):
 
 
 class _TransformerDecoderLayer(nn.Module):
-    def __init__(self, d_model, num_heads, dim_feedforward=2048, dropout=0.1):
+    def __init__(self, d_model, num_heads, dim_feedforward=2048, dropout_p=0.1):
         super(_TransformerDecoderLayer, self).__init__()
         # sub_layer1
-        self.self_attn = _MultiheadAttention(d_model, num_heads, dropout=dropout)
-        self.dropout1 = nn.Dropout(dropout)
+        self.self_attn = _MultiheadAttention(d_model, num_heads, dropout_p=dropout_p)
+        self.dropout1 = nn.Dropout(dropout_p)
         self.norm1 = nn.LayerNorm(d_model)
         # sub_layer2
-        self.multihead_attn = _MultiheadAttention(d_model, num_heads, dropout=dropout)
-        self.dropout2 = nn.Dropout(dropout)
+        self.multihead_attn = _MultiheadAttention(d_model, num_heads, dropout_p=dropout_p)
+        self.dropout2 = nn.Dropout(dropout_p)
         self.norm2 = nn.LayerNorm(d_model)
         # sub_layer3
         self.ffn = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
+            nn.Dropout(dropout_p),
             nn.Linear(dim_feedforward, d_model),
         )
-        self.dropout3 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout_p)
         self.norm3 = nn.LayerNorm(d_model)
 
     def forward(self, tgt, memory,
@@ -501,20 +459,22 @@ class _TransformerDecoderLayer(nn.Module):
         return tgt
 
 
-class _Transformer(nn.Module):
+class _TransformerBackbone(nn.Module):
+    """未加入embedding与positional encoding, 以及最后的Linear和softmax. 同torch.nn.Transformer"""
+
     def __init__(self, d_model=512, num_heads=8,
                  num_encoder_layers=6, num_decoder_layers=6,
-                 dim_feedforward=2048, dropout=0.1):
-        super(_Transformer, self).__init__()
+                 dim_feedforward=2048, dropout_p=0.1):
+        super(_TransformerBackbone, self).__init__()
         self.num_encoder_layers = num_encoder_layers
         self.num_decoder_layers = num_decoder_layers
         self.encoder_list = nn.ModuleList([
-            _TransformerEncoderLayer(d_model, num_heads, dim_feedforward, dropout)
+            _TransformerEncoderLayer(d_model, num_heads, dim_feedforward, dropout_p)
             for _ in range(num_encoder_layers)
         ])
         self.norm1 = nn.LayerNorm(d_model)
         self.decoder_list = nn.ModuleList([
-            _TransformerDecoderLayer(d_model, num_heads, dim_feedforward, dropout)
+            _TransformerDecoderLayer(d_model, num_heads, dim_feedforward, dropout_p)
             for _ in range(num_decoder_layers)
         ])
         self.norm2 = nn.LayerNorm(d_model)
@@ -550,7 +510,7 @@ class _Transformer(nn.Module):
 
 # torch.manual_seed(0)
 # m0 = nn.Transformer()
-# m1 = _Transformer()
+# m1 = _TransformerBackbone()
 # torch.manual_seed(0)
 # src = torch.rand(10, 16, 512)
 # tgt = torch.rand(20, 16, 512)
