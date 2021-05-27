@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from typing import Tuple, List, Union
+import math
 
 
 # --------------------------------------------------- activation
@@ -13,11 +14,10 @@ from typing import Tuple, List, Union
 def _relu(x: Tensor) -> Tensor:
     """(F.relu(inplace=False))
 
-    :param x: shape = (N, In) or (N, C, H, W)
+    :param x: shape = (*)
     :return: shape = x.shape"""
-    return torch.where(x > 0, x, torch.tensor(0.))
-    # or:
-    # return x * (x > 0).float()
+    return torch.where(x > 0, x,
+                       torch.tensor(0., dtype=x.dtype, device=x.device))
 
 
 def _leaky_relu(x: Tensor, negative_slope: float = 0.01) -> Tensor:
@@ -26,15 +26,13 @@ def _leaky_relu(x: Tensor, negative_slope: float = 0.01) -> Tensor:
 
 
 def _sigmoid(x: Tensor) -> Tensor:
-    """sigmoid(F.sigmoid())"""
-
+    """(F.sigmoid())"""
     return 1 / (1 + torch.exp(-x))
 
 
 def _tanh(x: Tensor) -> Tensor:
     """(F.tanh())"""
-    return (torch.exp(2 * x) - 1) / (torch.exp(2 * x) + 1)
-    # or:
+    return (1 - torch.exp(2 * -x)) / (1 + torch.exp(2 * -x))  # 上下同乘(e^-x)
     # return (torch.exp(x) - torch.exp(-x)) / (torch.exp(x) + torch.exp(-x))
 
 
@@ -42,16 +40,39 @@ def _softmax(x: Tensor, dim: int) -> Tensor:
     """(F.softmax())
 
     :param x: shape = (N, In)
-    :param dim: int. 一般dim设为-1(表示输出Tensor的和为1.的dim为哪个)
+    :param dim: int. 一般dim设为-1
     :return: shape = x.shape"""
-    # shape(N, In) / shape(N, 1), 若dim = -1
-    return torch.exp(x) / torch.sum(torch.exp(x), dim, True)
+    return torch.exp(x) / torch.sum(torch.exp(x), dim, keepdim=True)
+
+
+def _silu(x):
+    """(F.silu())"""
+    return x * torch.sigmoid(x)
+
+
+def _gelu(x):
+    """(F.gelu())
+    https://arxiv.org/pdf/1606.08415.pdf"""
+    return x / 2 * (1 + torch.erf(x / math.sqrt(2)))
 
 
 # --------------------------------------------------- loss
 
 def _one_hot(x: Tensor, num_classes: int = -1) -> Tensor:
-    """(F.one_hot())
+    """(F.one_hot()). 较慢
+
+    :param x: shape = (N,), torch.long.
+    :param num_classes: int. default: max(x) + 1
+    :return: shape = (N, num_classes). torch.long"""
+    if num_classes == -1:
+        num_classes = torch.max(x) + 1
+    output = torch.zeros(x.shape[0], num_classes, dtype=torch.long, device=x.device)
+    output[range(x.shape[0]), x] = 1
+    return output
+
+
+def _one_hot_2(x: Tensor, num_classes: int = -1) -> Tensor:
+    """(F.one_hot()). 快速
 
     :param x: shape = (N,), torch.long.
     :param num_classes: int. default: max(x) + 1
@@ -59,6 +80,27 @@ def _one_hot(x: Tensor, num_classes: int = -1) -> Tensor:
     if num_classes == -1:
         num_classes = torch.max(x) + 1
     return torch.eye(num_classes, dtype=torch.long, device=x.device)[x]
+
+
+# import time
+#
+# x = torch.randint(0, 2, (10000000,))
+# t = time.time()
+# _one_hot(x)
+# print(time.time() - t)  # 1.6705341339111328
+# t = time.time()
+# _one_hot_2(x)
+# print(time.time() - t)  # 0.07978534698486328
+
+
+def _embedding(x, weight):
+    """(F.embedding())
+
+    :param x: shape[*]
+    :param weight: shape[NV, E]. NV: num_vocab, E: embedding_dim
+    :return: shape[*, E]
+    """
+    return weight[x]
 
 
 def _nll_loss(pred: Tensor, target: Tensor) -> Tensor:
@@ -80,7 +122,7 @@ def _cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
     :return: shape = ()"""
 
     pred = F.log_softmax(pred, dim=-1)
-    return _nll_loss(pred, target)
+    return F.nll_loss(pred, target)
 
 
 def _binary_cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
@@ -89,7 +131,7 @@ def _binary_cross_entropy(pred: Tensor, target: Tensor) -> Tensor:
     :param pred: shape = (N,)
     :param target: shape = (N,) torch.float32
     :return: shape = ()"""
-
+    # torch.mean(-torch.log(pred) * target + -torch.log(1 - pred) * (1 - target))
     return torch.mean(torch.clamp_max(-torch.log(pred), 100) * target +  # 防止inf
                       torch.clamp_max(-torch.log(1 - pred), 100) * (1 - target))
 
@@ -846,13 +888,3 @@ def _gru_cell(x: Tensor, hx: Tensor, w_ih: Tensor, w_hh: Tensor,
         r * (hx @ w_hh[c_hide * 2:c_hide * 3].t() + (b_hh[c_hide * 2:c_hide * 3] if b_hh is not None else 0)))
     y = (1 - z) * n + z * hx  # hx_1
     return y
-
-
-def _embedding(x, weight):
-    """(F.embedding())
-
-    :param x: shape[*]
-    :param weight: shape[NV, E]. NV: num_vocab, E: embedding_dim
-    :return: shape[*, E]
-    """
-    return weight[x]
