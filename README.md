@@ -1,34 +1,16 @@
-# dnn_study
-努力学习深度学习
+# torch_study
+开发中...
+
+由于要重新学一遍torch，所以重新写一遍
+
+### 目录结构说明
+
+- `_old/`: 老版代码目录
+- `dev/`: 开发目录
+- `test_modules/`: 代码测试目录
 
 
-## 运行程序
-注：`1 torch_func_implement`中的内容才是宝藏 ~  
-里面复现了大量torch的底层函数，有助于理解深度学习的基础  
+### 参考资料
 
-```
-torch_func_implement/only_forward.py
-torch_func_implement/advanced/only_forward.py
-```
-
-
-回归_examples:
-```
-python3 numpy_回归.py
-
-------------------------
-python3 torch_回归.py
-
-------------------------
-python3 torch_回归_底层.py
-
-```
-
-分类_examples:
-```
-python3 mnist_torch.py
-
-------------------------
-python3 cifar10_torch_with_tensorboard.py
-```
+- [https://pytorch.org/docs/stable/index.html](https://pytorch.org/docs/stable/index.html)
 

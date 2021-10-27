@@ -1,9 +1,0 @@
-mnist/
-*.pth
-logs/
-other/
-temp.py
-runs/
-cifar/
-temp*
-trash.py
