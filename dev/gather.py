@@ -17,7 +17,8 @@ def gather(input: Tensor, dim: int, index: Tensor) -> Tensor:
     """
     idxs = [range(length) for length in input.shape]
     idxs = np.ix_(*idxs)
-    idxs = [torch.tensor(arr, dtype=torch.long) for arr in idxs]
+    idxs = [torch.tensor(arr, dtype=torch.long) for arr in idxs]  # 转Tensor
     idxs[dim] = index
+    #
     out = input[idxs]
     return out
