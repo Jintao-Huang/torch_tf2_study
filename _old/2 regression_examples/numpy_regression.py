@@ -6,69 +6,74 @@ import matplotlib.pyplot as plt
 
 
 def fc_forward(x, w, b=None):
-    """z = x @ w + b
+    """fc前向
 
-    全连接层(full connect)的前向传播"""
-    assert x.shape[1] == w.shape[0]
+    :param x: shape[N, In]
+    :param w: shape[Out, In]
+    :param b: shape[Out]
+    :return: shape[N, Out]
+    """
     if b is None:
-        return np.matmul(x, w)
-    assert w.shape[1] == b.shape[0]
-    return np.matmul(x, w) + b
+        return x @ w.T
+    return x @ w.T + b
 
 
 def fc_backward(x, w, z_grad):
-    """z = x @ w + b
+    """fc反向
 
-    全连接层的反向传播
-    :return: x_grad, w_grad, b_grad"""
+    :param x: shape[N, In]
+    :param w: shape[Out, In]
+    :param z_grad: shape[N, Out]
+    :return: Tuple[x_grad, w_grad, b_grad]
+        x_grad: shape[N, In]
+        w_grad: shape[Out, In]
+        b_grad: shape[Out]
+    """
 
-    # x @ w = z
-    # -> z.shape = x.shape[0], z.shape[1]
-    assert z_grad.shape[0] == x.shape[0]
-    assert z_grad.shape[1] == w.shape[1]
-
-    x_grad = z_grad @ w.T
-    w_grad = x.T @ z_grad / x.shape[0]  # 除去 batch_size!!!
-    b_grad = np.mean(z_grad, axis=0)
+    x_grad = z_grad @ w
+    w_grad = z_grad.T @ x
+    b_grad = np.sum(z_grad, axis=0)
 
     return x_grad, w_grad, b_grad
 
 
 def relu_forward(z):
-    """a = relu(z)
+    """relu前向
 
-    relu前向传播"""
+    :param z: shape[Out]
+    :return: shape[Out]
+    """
     return z * (z > 0)
 
 
 def relu_backward(z, a_grad):
-    """a = relu(z)
+    """relu反向
 
-    relu反向传播"""
+    :param z: shape[Out]
+    :param a_grad: shape[Out]
+    :return: shape[Out]
+    """
     return a_grad * (z > 0)
 
 
-def mse_loss(y_true, y_pred):
-    """loss = np.mean((y_true - y_pred) ** 2)
+def mse_loss_forward(y_true, y_pred):
+    """均方误差前向
 
-    均方误差
-
-    :param y_true: shape = (batch_size, classes_num)
-    :param y_pred: shape = (batch_size, classes_num)
-    :return: shape = (batch_size,)"""
-    assert y_true.shape == y_pred.shape
-    return np.mean((y_true - y_pred) ** 2)
+    :param y_true: shape[N, Out]
+    :param y_pred: shape[N, Out]
+    :return: shape[]"""
+    return np.mean(np.sum((y_true - y_pred) ** 2, axis=1))
 
 
-def mse_loss_grad(y_true, y_pred):
-    """grad = d_loss/d_y_pred = 2 * (y_true - y_pred) * -1
+def mse_loss_backward(y_true, y_pred):
+    """均方误差反向
 
-    :param y_true: shape = (batch_size, classes_num)
-    :param y_pred: shape = (batch_size, classes_num)
-    :return: shape = (batch_size, classes_num)"""
+    :param y_true: shape[N, Out]
+    :param y_pred: shape[N, Out]
+    :return: shape[N, Out]"""
 
-    assert y_true.shape == y_pred.shape
-    return 2 * (y_pred - y_true)
+    N = y_true.shape[0]  # batch_size
+    return 2 * (y_pred - y_true) / N
 
 
 def sgd(params, grads, lr=1e-2):
@@ -78,7 +83,6 @@ def sgd(params, grads, lr=1e-2):
     :param grads: List[ndarray]
     :param lr: float
     """
-    assert isinstance(params, list)
     for i in range(len(params)):
         params[i] -= lr * grads[i]
 
@@ -93,8 +97,8 @@ def main():
     y_true = x ** 2 + 2 + np.random.normal(0, 0.1, x.shape)
 
     # 2. 参数初始化
-    w1 = np.random.normal(0, 0.1, (1, hide_c))
-    w2 = np.random.normal(0, 0.1, (hide_c, 1))
+    w1 = np.random.normal(0, 0.1, (1, hide_c)).T
+    w2 = np.random.normal(0, 0.1, (hide_c, 1)).T
     b1 = np.zeros((hide_c,))
     b2 = np.zeros((1,))
 
@@ -103,17 +107,17 @@ def main():
     # 网络模型: 2层全连接网络
     # loss: mse(mean square error) 均方误差
     # optim: sgd(stochastic gradient descent)  随机梯度下降. (虽然此处为批梯度下降，别在意这些细节)
-    for i in range(501):
+    for i in range(1001):
         # 1.forward
         z = fc_forward(x, w1, b1)
         a = relu_forward(z)
         y_pred = fc_forward(a, w2, b2)
 
         # 2. loss
-        loss = mse_loss(y_true, y_pred)
+        loss = mse_loss_forward(y_true, y_pred)
 
         # 3. backward
-        pred_grad = mse_loss_grad(y_true, y_pred)
+        pred_grad = mse_loss_backward(y_true, y_pred)
         a_grad, w2_grad, b2_grad = fc_backward(a, w2, pred_grad)
         z_grad = relu_backward(z, a_grad)
         _, w1_grad, b1_grad = fc_backward(x, w1, z_grad)

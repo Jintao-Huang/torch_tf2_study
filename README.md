@@ -15,7 +15,7 @@
 - [https://pytorch.org/docs/stable/index.html](https://pytorch.org/docs/stable/index.html)
 
 
-### 版本
-
+### 环境
+- python3.9
 - torch==1.10.0
 - torchvision==0.11.1
