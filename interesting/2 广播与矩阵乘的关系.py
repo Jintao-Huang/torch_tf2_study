@@ -5,7 +5,10 @@
 
 """总结
 1. 有些[广播+求和]可以优化成矩阵乘，从而加速运算，减少内存消耗
-- 求和可以包括多个dim. 详情见`dev>torch>nn>functional>conv2d`
+- 求和可以包括多个dim.
+  例子见`dev>torch>nn>functional>conv2d`
+- 其他例子: `dev>torch>cov`
+  关键是看求和的那几个维度
 """
 import torch
 

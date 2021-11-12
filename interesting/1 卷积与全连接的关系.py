@@ -5,6 +5,7 @@
 """结论:
 1. 卷积和全连接是可以相互转换的
 - 卷积等于: [KH * KW * C]上的全连接
+  例子见`dev>torch>nn>functional>conv2d`
 """
 
 import torch

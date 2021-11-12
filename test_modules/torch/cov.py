@@ -3,7 +3,7 @@
 # Date: 
 
 import torch
-from dev import cov
+from dev.torch import cov
 
 # In[0]:
 x = torch.randn(10, 20)

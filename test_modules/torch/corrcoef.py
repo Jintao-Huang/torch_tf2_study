@@ -3,7 +3,7 @@
 # Date: 
 
 import torch
-from dev import corrcoef
+from dev.torch import corrcoef
 
 # In[0]:
 x = torch.randn(10, 20)

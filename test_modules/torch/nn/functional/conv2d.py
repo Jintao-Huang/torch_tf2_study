@@ -6,10 +6,11 @@ from torch.nn.functional import conv2d as _conv2d
 from dev.torch.nn.functional import conv2d
 import torch
 
+# In[0]
 device = 'cuda'
-N, Cin, H, W = 16, 32, 50, 50
-KH, KW, PH, PW = 3, 3, 1, 1
-SH, SW = 1, 1
+N, Cin, H, W = 16, 32, 50, 60
+KH, KW, PH, PW = 3, 4, 1, 2
+SH, SW = 1, 2
 Cout = 64
 #
 rng = torch.Generator(device).manual_seed(42)

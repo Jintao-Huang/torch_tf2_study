@@ -19,14 +19,14 @@ def conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: Tuple[int, in
     :param padding: Tuple[PH, PW]
     :return: shape[N, Cout, Hout, Wout]
     """
-    SH, SW, PH, PW = (*stride, *padding)
+    (SH, SW), (PH, PW) = stride, padding
     N, Cin, H, W = x.shape
     Cout, _, KH, KW = weight.shape
     Hout, Wout = (H + 2 * PH - KH) // SH + 1, \
                  (W + 2 * PW - KW) // SW + 1
     #
     if PH != 0 or PW != 0:
-        x = pad(x, (PW, PW, PH, PH))  # LTRB
+        x = pad(x, (PW, PW, PH, PH))  # LRTB
     #
     output = torch.empty((N, Cout, Hout, Wout), dtype=x.dtype, device=x.device)
     weight = weight.view(Cout, Cin * KH * KW)

@@ -2,7 +2,7 @@
 # Email: hjt_study@qq.com
 # Date: 
 
-from dev import gather
+from dev.torch import gather
 from torch import gather as _gather
 import torch
 

@@ -2,7 +2,7 @@
 # Email: hjt_study@qq.com
 # Date: 
 
-from dev import dist
+from dev.torch import dist
 from torch import dist as _dist
 import torch
 

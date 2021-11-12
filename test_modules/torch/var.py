@@ -3,7 +3,7 @@
 # Date: 
 
 import torch
-from dev import var
+from dev.torch import var
 
 # In[0]: 1D
 x = torch.randn(10)
