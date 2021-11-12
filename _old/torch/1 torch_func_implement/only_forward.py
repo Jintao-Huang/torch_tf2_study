@@ -370,18 +370,25 @@ def _avg_pool2d(x: Tensor, kernel_size: int, stride: int = None, padding: int = 
     if padding:
         x = _zero_padding2d(x, padding)
     # Out = (In + 2*P − K) // S + 1
-    # padding的0.不加入mean()运算, 故如此设计
     output_h, output_w = (x.shape[2] - kernel_size) // stride + 1, \
                          (x.shape[3] - kernel_size) // stride + 1
     output = torch.empty((*x.shape[:2], output_h, output_w),
                          dtype=x.dtype, device=x.device)
     for i in range(output.shape[2]):  # Hout
         for j in range(output.shape[3]):  # # Wout
-            h_start, w_start = i * stride - padding, j * stride - padding
+            h_start, w_start = i * stride, j * stride
             h_pos, w_pos = slice(h_start, (h_start + kernel_size)), \
                            slice(w_start, (w_start + kernel_size))
+
             output[:, :, i, j] = torch.mean(x[:, :, h_pos, w_pos], dim=(-2, -1))
     return output
+
+
+# from torch.nn.functional import avg_pool2d, max_pool2d
+#
+# x = torch.randn(16, 32, 20, 20)
+# print(max_pool2d(x, 2, padding=1, return_indices=True))
+# print(_max_pool2d(x, 2, padding=1, return_indices=True))  #
 
 
 def _linear(x: Tensor, weight: Tensor, bias: Tensor = None) -> Tensor:
