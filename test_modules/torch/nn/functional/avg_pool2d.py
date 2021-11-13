@@ -9,6 +9,6 @@ import torch
 
 # In[0]
 x = torch.randn(16, 32, 20, 30, device='cuda')
-y1 = avg_pool2d(x, (3, 4), (2, 3), (1, 2))
-y2 = F.avg_pool2d(x, (3, 4), (2, 3), (1, 2))
+y1 = F.avg_pool2d(x, (3, 4), (2, 3), (1, 2))
+y2 = avg_pool2d(x, (3, 4), (2, 3), (1, 2))
 print(torch.allclose(y1, y2, atol=1e-6))  # True

@@ -6,7 +6,7 @@
 """总结
 1. 有些[广播+求和]可以优化成矩阵乘，从而加速运算，减少内存消耗
 - 求和可以包括多个dim.
-  例子见`dev>torch>nn>functional>conv2d`
+  例子见`dev>torch>nn>functional>conv2d_easy`
 - 其他例子: `dev>torch>cov`
   关键是看求和的那几个维度
 """
@@ -23,12 +23,14 @@ a = torch.randn((100, 10), generator=rng)
 b = torch.randn((10, 20), generator=rng)
 y = a @ b
 y2 = matmul_broadcast(a, b)
+print(y.shape)  # torch.Size([100, 20])
 print(torch.allclose(y, y2, atol=1e-6))  # True
 #
 a = torch.randn((200, 100, 10), generator=rng)
 b = torch.randn((200, 10, 20), generator=rng)
 y = a @ b
 y2 = matmul_broadcast(a, b)
+print(y.shape)  # torch.Size([200, 100, 20])
 print(torch.allclose(y, y2, atol=1e-6))  # True
 
 # In[1]. 测速度1

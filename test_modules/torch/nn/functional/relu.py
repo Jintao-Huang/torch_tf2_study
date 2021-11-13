@@ -11,8 +11,8 @@ device = 'cuda'
 rng = torch.Generator(device).manual_seed(42)
 x = torch.randn((100,), generator=rng, device=device)
 #
-y1 = relu(x)
-y2 = F.relu(x, inplace=True)
+y1 = F.relu(x, inplace=True)
+y2 = relu(x)
 #
-print(x is y2)  # True
+print(x is y1)  # True
 print(torch.allclose(y1, y2))  # True

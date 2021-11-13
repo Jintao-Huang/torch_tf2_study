@@ -30,9 +30,7 @@ def conv_transpose2d(input: Tensor, weight: Tensor, bias: Tensor = None,
     Hout, Wout = SH * (H - 1) - 2 * PH + KH, \
                  SW * (W - 1) - 2 * PW + KW,
     #
-    output = torch.zeros((N, Cout, Hout + 2 * PH, Wout + 2 * PW),
-                         dtype=x.dtype, device=x.device)
-    output += bias[None, :, None, None]
+    output = bias[None, :, None, None].tile([N, 1, Hout + 2 * PH, Wout + 2 * PW])
     weight = weight.view(Cin, Cout * KH * KW)
     #
     for i in range(H):

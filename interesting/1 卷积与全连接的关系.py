@@ -3,9 +3,10 @@
 # Date: 
 
 """结论:
-1. 卷积和全连接是可以相互转换的
+1. 逐点卷积就是全连接
+2. 卷积和全连接是可以相互转换的
 - 卷积等于: [KH * KW * C]上的全连接
-  进阶例子见`dev>torch>nn>functional>conv2d`
+  进阶例子见`dev>torch>nn>functional>conv2d_easy`
 """
 
 import torch
