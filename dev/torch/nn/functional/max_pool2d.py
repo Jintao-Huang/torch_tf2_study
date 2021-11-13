@@ -8,19 +8,20 @@ import torch.nn.functional as F
 from typing import Tuple
 
 
-def max_pool2d(x: Tensor, kernel_size: Tuple[int, int],
+def max_pool2d(input: Tensor, kernel_size: Tuple[int, int],
                stride: Tuple[int, int] = None, padding: Tuple[int, int] = 0) -> Tensor:
     """return_indices=False
 
-    :param x: shape[N, C, H, W]
+    :param input: shape[N, C, H, W]
     :param kernel_size:
     :param stride: default = kernel_size
     :param padding:
     :return: shape[N, C, Hout, Wout]"""
+    x = input
     stride = stride or kernel_size
     #
-    (KH, KW), (SH, SW), (PH, PW) = kernel_size, stride, padding
     N, Cin, H, W = x.shape
+    (KH, KW), (SH, SW), (PH, PW) = kernel_size, stride, padding
     Hout, Wout = (H + 2 * PH - KH) // SH + 1, \
                  (W + 2 * PW - KW) // SW + 1
     #

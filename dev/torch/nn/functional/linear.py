@@ -10,14 +10,15 @@ from torch import Tensor
 """
 
 
-def linear(x: Tensor, weight: Tensor, bias: Tensor = None) -> Tensor:
+def linear(input: Tensor, weight: Tensor, bias: Tensor = None) -> Tensor:
     """
 
-    :param x: shape[N, In]
+    :param input: shape[N, In]
     :param weight: shape[Out, In]
     :param bias: shape[Out]
     :return: shape[N, Out]"""
-
+    x = input
+    #
     y = x @ weight.T  # Ot(N*In*Out)
     if bias is not None:
         y += bias  # Ot(N*Out)

@@ -12,20 +12,22 @@ from typing import Tuple
 """
 
 
-def conv2d(x: Tensor, weight: Tensor, bias: Tensor = None, stride: Tuple[int, int] = (1, 1),
+def conv2d(input: Tensor, weight: Tensor, bias: Tensor = None, stride: Tuple[int, int] = (1, 1),
            padding: Tuple[int, int] = (0, 0)) -> Tensor:
     """
 
-    :param x: shape[N, Cin, H, W]
+    :param input: shape[N, Cin, H, W]
     :param weight: shape[Cout, Cin, KH, KW]
     :param bias: shape[Cout]
     :param stride: Tuple[SH, SW]
     :param padding: Tuple[PH, PW]
     :return: shape[N, Cout, Hout, Wout]
     """
-    (SH, SW), (PH, PW) = stride, padding
+    x = input
+    #
     N, Cin, H, W = x.shape
     Cout, _, KH, KW = weight.shape
+    (SH, SW), (PH, PW) = stride, padding
     Hout, Wout = (H + 2 * PH - KH) // SH + 1, \
                  (W + 2 * PW - KW) // SW + 1
     #
